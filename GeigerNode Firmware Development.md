@@ -8,6 +8,29 @@ The immediate goal is SAFE HARDWARE BRING-UP of newly manufactured PCBs using an
 
 Do not jump ahead to the complete firmware. Work through the bring-up phases in order and stop at explicit checkpoints.
 
+Agent directives for this repository live in `.cursor/rules/`. This file remains the plan. The PROJECT STATUS section below is the persistence layer: update it when the phase, a checkpoint, a decision, or the stopping point changes. Numbered hardware, safety, and fuse sections stay as written unless the user changes those requirements.
+
+======================================================================
+PROJECT STATUS
+======================================================================
+
+Last updated: 2026-10-01
+
+Where we are:
+- Plan only. No firmware sources, Makefile, or bring-up notes in the tree yet.
+- Next allowed task is section 33: Makefile, README.md, bringup/README.md, include/board.h, src/main.c. Stop after that until measured bring-up results exist.
+- Phases 0–9 have not started.
+- Local git branch is `main`. Target workflow is feature/bugfix branches merged to `dev`, with tagged releases only on `master`. Those branches are not created yet.
+
+Checkpoint results:
+- None recorded.
+
+Decisions that must survive across sessions:
+- None beyond the numbered sections.
+
+Open blockers:
+- Human bring-up measurements are not recorded: device signature, fuse bytes, 3.3 V rail, LED on PD7, PB1 held LOW.
+
 ======================================================================
 1. HARDWARE
 ======================================================================

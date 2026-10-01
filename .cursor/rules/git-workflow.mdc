@@ -1,0 +1,20 @@
+---
+description: Feature and bugfix branches merge to dev; master gets tagged releases only
+alwaysApply: true
+---
+
+# Git workflow
+
+Integration branch is `dev`. Release branch is `master`.
+
+- Start from an up-to-date `dev`.
+- Put new work on `feature/<short-name>`.
+- Put fixes on `bugfix/<short-name>`.
+- Do not commit feature or bugfix work directly on `dev` or `master`.
+- Merge a finished feature or bugfix branch into `dev`.
+- Put a commit on `master` only for a real release, and tag that commit (`vMAJOR.MINOR.PATCH`).
+- Do not leave unreleased development commits on `master`.
+
+Release path: `feature/*` or `bugfix/*` → `dev` → when the user calls a real release, merge `dev` into `master` and tag that commit.
+
+Create a commit, merge, tag, or push only when the user asks. Do not force-push, skip hooks, or rewrite published history unless the user explicitly asks.

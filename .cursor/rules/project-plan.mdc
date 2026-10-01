@@ -1,0 +1,27 @@
+---
+description: GeigerNode plan file is the shared project memory for every agent
+alwaysApply: true
+---
+
+# Project plan is the persistence layer
+
+`GeigerNode Firmware Development.md` is the main development plan for this repository. Every agent working here follows it.
+
+At the start of a task, read that file and continue from PROJECT STATUS. Do not jump ahead of the current phase or checkpoint.
+
+You may edit that file so the next agent can see where the project is. Update PROJECT STATUS when any of these change:
+
+- current phase or the next allowed task
+- a checkpoint result (pass, fail, or measurement)
+- a decision later sessions must keep
+- a blocker, or the exact point where work stopped
+
+Leave the numbered hardware, safety, fuse, and architecture sections unchanged unless the user changes those requirements. A status note does not override HV, fuse, or bring-up safety rules.
+
+Do not create a second plan file. If PROJECT STATUS and a numbered section disagree, the numbered safety rules win and PROJECT STATUS must be corrected.
+
+```text
+Where we are:
+- Phase 2 firmware flashed. LED on PD7 blinks. PB1 measured LOW.
+- Stopped before Phase 3. Fuse write still needs human approval.
+```

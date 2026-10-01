@@ -1,0 +1,14 @@
+---
+description: Adversarial multimodel review is required before master and on demand otherwise
+alwaysApply: true
+---
+
+# Adversarial review
+
+Before merging anything into `master`, run the adversarial multimodel review and do not merge until blocking findings are fixed or the user explicitly accepts them.
+
+Read and follow the `adversarial-multimodel-review` skill. The implementing agent's own summary is not that review.
+
+On `dev` and on `feature/*` or `bugfix/*` branches, run the review only when the user asks.
+
+A tagged release is still a merge onto `master`, so the review is required there too.
