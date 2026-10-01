@@ -11,8 +11,9 @@
  * GM_PULSE is PD2 / INT0, active low, falling edge. The pin is an input with a pull-up.
  * PD3 is spare and stays untouched.
  * HV_ADC is PC0 / ADC0. The converter stays off while it is read.
+ * TWI0 slave address is 0x66. SDA is PC4 and SCL is PC5.
  * Timer2 is the millisecond tick. Its pin outputs stay disconnected.
- * Timer1 and TWI0 stay disabled.
+ * Timer1 stays disabled.
  */
 
 #define HV_SW_PORT     PORTB

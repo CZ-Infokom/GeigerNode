@@ -191,10 +191,33 @@ make flash
 make verify
 ```
 
+Board 01 passed this step. The pattern was 1 long flash and 5 short flashes, raw 5, about 2.15 V at the HV node. The converter stayed off.
+
+## Phase 5D — TWI slave
+
+TWI0 is a slave at 7-bit address `0x66`. SDA is PC4 (TQFP pin 27) and SCL is PC5 (TQFP pin 28). The onboard 4.7 kOhm resistors pull those lines up to 3.3 V. The LED returns to a 500 ms blink so the firmware is visibly running.
+
+Register `0x00` returns `0x7D`. Registers `0x06`..`0x08` return the fixed value `0x00 0x12 0x34`. A write sets the register pointer. A repeated START then read must use that pointer. Sequential reads advance it. The converter stays off.
+
+```sh
+make clean
+make flash
+make verify
+```
+
+From a 3.3 V I2C master on the internal bus, or from the host side through the BSS138 pair:
+
+```sh
+i2cdetect -y <bus>
+i2cget -y <bus> 0x66 0x00
+i2ctransfer -y <bus> w1@0x66 0x06 r3
+```
+
+Expect address `0x66` to answer, `0x00` to read `0x7d`, and the three-byte read to return `0x00 0x12 0x34`. PB1 stays low.
+
 ## Stop
 
-I2C and HV generation stay out of scope:
+HV generation stays out of scope:
 
-- I2C
 - HV PWM
 - closed-loop HV regulation

@@ -24,7 +24,7 @@ make F_CPU=1000000UL
 make F_CPU=8000000UL
 ```
 
-The Makefile default is `8000000UL`. PD7 on board 01 measured 500 Hz, which confirmed the 8 MHz clock. `main` rejects any other `F_CPU`. With the converter off, it shows the ADC0 count on the LED: one long flash, then one short flash per count.
+The Makefile default is `8000000UL`. PD7 on board 01 measured 500 Hz, which confirmed the 8 MHz clock. `main` rejects any other `F_CPU`. The LED blinks every 500 ms. TWI0 answers at address `0x66`: register `0x00` is `0x7D`, and registers `0x06` through `0x08` are `0x00 0x12 0x34`.
 
 Build output goes to `bin/`, which git ignores. `make` builds `bin/geigernode.hex` and prints `avr-size`. `make disasm` writes `bin/geigernode.lst`. `make clean` removes `bin/`.
 

@@ -17,7 +17,7 @@ PROJECT STATUS
 Last updated: 2026-10-01
 
 Where we are:
-- Work is on local `feature/bringup`, branched from local `dev`. Through Phase 5C, the HV ADC read with the converter off, is committed here. `dev` and `main` do not have it yet.
+- Work is on local `feature/bringup`, branched from local `dev`. Through Phase 5D, the untested TWI slave, is committed here. `dev` and `main` do not have it yet.
 - Phase 0 host toolchain is recorded in `firmware/bringup/README.md`. Compiler is `/opt/avr8-gnu-toolchain-4.0.0` (`avr-gcc` `AVR_8_bit_GNU_Toolchain_4.0.0_52`, GCC 15.1.0). `avrdude` is system 8.1 at `/usr/bin/avrdude`. `-mmcu=atmega328pb` works.
 - Section 33 skeleton is in the tree: `firmware/Makefile`, `firmware/README.md`, `firmware/bringup/README.md`, `firmware/include/board.h`, `firmware/src/main.c`. PB1 is forced low and PD7 blinks. `make flash` programs flash only.
 - Host build succeeds with no warnings (`F_CPU=1000000UL`, 240 bytes text). That image was flashed and verified on 2026-10-01.
@@ -26,7 +26,8 @@ Where we are:
 - Phase 4 passed. Before the timer image, the 1 MHz blink firmware flashed at 8 Hz. After `make F_CPU=8000000UL flash` (260 bytes, verified), PD7 measured 500 Hz. The Makefile default is now `8000000UL`.
 - Phase 5A passed on 2026-10-01. PD7 blinks with 500 ms on and 500 ms off, and PB1 remains low.
 - Phase 5B passed on 2026-10-01. PD2 falling edges increment the counter, and the LED flickers when they arrive. The tube stayed disconnected.
-- Phase 5C passed on 2026-10-01. ADC0 read raw 5 with the converter off (1 long flash, 5 short flashes). Nominal conversion is 2.15 V at the HV node; the meter earlier read 2.1 V. Next allowed task is Phase 5D, the TWI slave. HV stays off.
+- Phase 5C passed on 2026-10-01. ADC0 read raw 5 with the converter off (1 long flash, 5 short flashes). Nominal conversion is 2.15 V at the HV node; the meter earlier read 2.1 V.
+- Phase 5D TWI slave firmware is written and was not tested on a bus. On 2026-10-01 the user said to assume it works. It is not a measured pass. When a master is available, confirm address `0x66`, register `0x00` = `0x7D`, and registers `0x06`..`0x08` = `0x00 0x12 0x34`. HV stays off.
 
 Checkpoint results:
 - Host toolchain: pass. `avr-gcc` 15.1.0 accepts `atmega328pb`. avrdude 8.1 has `m328pb` and `atmelice_isp`.
@@ -44,6 +45,7 @@ Checkpoint results:
 - Phase 5A LED: pass. 2026-10-01, PD7 blinks 500 ms on and 500 ms off. PB1 remains low.
 - Phase 5B GM pulse: pass. 2026-10-01, falling edges on PD2 are counted and the LED flickers. Tube disconnected. PB1 remains low.
 - Phase 5C HV ADC: pass. 2026-10-01, raw 5 with the converter off. Nominal HV-node voltage 2.15 V against an earlier 2.1 V meter reading.
+- Phase 5D TWI: assumed working, not measured. No master was connected.
 
 Decisions that must survive across sessions:
 - Build with `/opt/avr8-gnu-toolchain-4.0.0/bin/avr-gcc`, `avr-objcopy`, and `avr-size`. The `avr-gcc` 12.1.0 on `PATH` is a different install.
@@ -51,7 +53,7 @@ Decisions that must survive across sessions:
 - Saved fuses select the internal 8 MHz RC with CKDIV8 unprogrammed. The measured PD7 frequency is 500 Hz, and the Makefile default is `F_CPU=8000000UL`.
 
 Open blockers:
-- Phase 5D has not started. The GM tube stays disconnected. HV stays off. The 1.1 V ADC reference is not calibrated.
+- Phase 5D has no bus measurement. Do not treat the slave as verified until `0x66` is read back. The GM tube stays disconnected. HV stays off. The 1.1 V ADC reference is not calibrated.
 
 ======================================================================
 1. HARDWARE
