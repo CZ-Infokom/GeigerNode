@@ -7,8 +7,8 @@
 #   make F_CPU=1000000UL
 #   make F_CPU=8000000UL
 #
-# The default below is only a starting assumption for a CKDIV8 part.
-# It is not evidence that this board runs at 1 MHz.
+# Board 01 measured 500 Hz on PD7 with this image, so the CPU clock is 8 MHz.
+# The default matches that clock.
 
 TOOLCHAIN := /opt/avr8-gnu-toolchain-4.0.0
 
@@ -25,7 +25,7 @@ AVRDUDE := avrdude
 PROGRAMMER := atmelice_isp
 PORT := usb
 
-F_CPU ?= 1000000UL
+F_CPU ?= 8000000UL
 
 CFLAGS := \
 	-mmcu=$(MCU) \

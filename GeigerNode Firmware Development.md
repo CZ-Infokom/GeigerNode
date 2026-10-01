@@ -17,13 +17,14 @@ PROJECT STATUS
 Last updated: 2026-10-01
 
 Where we are:
-- Work is on local `feature/bringup`, branched from local `dev`. Phase 2 and the approved fuse write are committed here. `dev` and `main` do not have them yet.
+- Work is on local `feature/bringup`, branched from local `dev`. Phase 2, the fuse write, and the 8 MHz clock check are committed here. `dev` and `main` do not have them yet.
 - Phase 0 host toolchain is recorded in `firmware/bringup/README.md`. Compiler is `/opt/avr8-gnu-toolchain-4.0.0` (`avr-gcc` `AVR_8_bit_GNU_Toolchain_4.0.0_52`, GCC 15.1.0). `avrdude` is system 8.1 at `/usr/bin/avrdude`. `-mmcu=atmega328pb` works.
 - Section 33 skeleton is in the tree: `firmware/Makefile`, `firmware/README.md`, `firmware/bringup/README.md`, `firmware/include/board.h`, `firmware/src/main.c`. PB1 is forced low and PD7 blinks. `make flash` programs flash only.
 - Host build succeeds with no warnings (`F_CPU=1000000UL`, 240 bytes text). That image was flashed and verified on 2026-10-01.
 - Phase 2 has passed. Signature, fuses, flash, verify, PD7 blink, PB1 low, 3.3 V rail, supply current, no heating, and HV converter inactive are recorded in `firmware/bringup/boards/board01.txt`.
 - Phase 3 fuses were written on 2026-10-01 with `make fuses` and read back as LFUSE `0xE2`, HFUSE `0xD9`, EFUSE `0xF5`. Signature remained `0x1E9516`. `make flash` still programs flash only.
-- Next step is Phase 4: measure a timer-derived frequency on a scope or logic analyzer and confirm the CPU clock is about 8 MHz before changing the `F_CPU` default.
+- Phase 4 passed. Before the timer image, the 1 MHz blink firmware flashed at 8 Hz. After `make F_CPU=8000000UL flash` (260 bytes, verified), PD7 measured 500 Hz. The Makefile default is now `8000000UL`.
+- Next allowed task is Phase 5, one low-voltage peripheral at a time, starting with the LED. HV stays off.
 
 Checkpoint results:
 - Host toolchain: pass. `avr-gcc` 15.1.0 accepts `atmega328pb`. avrdude 8.1 has `m328pb` and `atmelice_isp`.
@@ -37,14 +38,15 @@ Checkpoint results:
 - HV converter: inactive. HV side measures 2.1 V.
 - Phase 2: pass.
 - Phase 3 fuse write: pass. 2026-10-01 read-back LFUSE `0xE2`, HFUSE `0xD9`, EFUSE `0xF5`, signature `0x1E9516`.
+- Phase 4: pass. Pre-flash blink was exactly 8 Hz on the 1 MHz-timed image. Post-flash PD7 measured 500 Hz with the Timer2 image built at `F_CPU=8000000UL`. CPU clock is 8 MHz.
 
 Decisions that must survive across sessions:
 - Build with `/opt/avr8-gnu-toolchain-4.0.0/bin/avr-gcc`, `avr-objcopy`, and `avr-size`. The `avr-gcc` 12.1.0 on `PATH` is a different install.
 - `avrdude` stays `/usr/bin/avrdude` 8.1. It is not in the toolchain tree.
-- Saved fuses now select the internal 8 MHz RC with CKDIV8 unprogrammed. Keep the Makefile `F_CPU` default at `1000000UL` until a Phase 4 scope measurement confirms about 8 MHz.
+- Saved fuses select the internal 8 MHz RC with CKDIV8 unprogrammed. The measured PD7 frequency is 500 Hz, and the Makefile default is `F_CPU=8000000UL`.
 
 Open blockers:
-- Phase 4 clock measurement is not done. Do not set the project default to `F_CPU=8000000UL` until PD7 is measured.
+- None for the clock. Phase 5 has not started. HV stays off.
 
 ======================================================================
 1. HARDWARE

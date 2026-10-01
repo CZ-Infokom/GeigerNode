@@ -61,3 +61,10 @@ Read-back:
 - HFUSE 0xd9
 - EFUSE 0xf5
 ISP still works. The image then on the chip was still the F_CPU=1000000UL build.
+
+Phase 4 clock check, 2026-10-01. Pass.
+Before the 500 Hz image was flashed, the F_CPU=1000000UL blink firmware flashed at exactly 8 Hz. That is the 500 ms toggle running eight times faster.
+Then `make F_CPU=8000000UL flash` wrote 260 bytes and verify matched.
+PD7 measures 500 Hz. To the eye the LED stays lit, which matches a 500 Hz square wave.
+`make fuses` was run again and re-verified LFUSE 0xE2, HFUSE 0xD9, EFUSE 0xF5.
+CPU clock is 8 MHz. Makefile default is now F_CPU=8000000UL.

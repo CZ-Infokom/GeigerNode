@@ -24,7 +24,7 @@ make F_CPU=1000000UL
 make F_CPU=8000000UL
 ```
 
-The Makefile default is `1000000UL`, for a part whose 8 MHz RC oscillator is still divided by 8. Change it when the saved fuses say otherwise. A default of 8 MHz is not used until that clock is actually programmed and approved.
+The Makefile default is `8000000UL`. PD7 on board 01 measured 500 Hz with this image, which is the 8 MHz clock. `main` still rejects any other `F_CPU`.
 
 Build output goes to `bin/`, which git ignores. `make` builds `bin/geigernode.hex` and prints `avr-size`. `make disasm` writes `bin/geigernode.lst`. `make clean` removes `bin/`.
 

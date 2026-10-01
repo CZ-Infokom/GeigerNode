@@ -128,13 +128,24 @@ Write the results to `bringup/boards/board01.txt` (this directory). Create that 
 - PB1 level
 - supply current, if measured
 
+## Phase 4 — clock check
+
+The approved fuses are already on this board: internal 8 MHz RC, CKDIV8 unprogrammed. Confirm that clock with a scope or logic analyzer on PD7. A visual blink is not the measurement.
+
+`main` holds PB1 low and toggles PD7 from Timer2. Built with `F_CPU=8000000UL`, PD7 is a 500 Hz square wave (period 2 ms). The same image on a 1 MHz clock would be 62.5 Hz (period 16 ms).
+
+```sh
+make clean
+make F_CPU=8000000UL flash
+make F_CPU=8000000UL verify
+```
+
+Board 01 measured 500 Hz on PD7, and the Makefile default is now `8000000UL`. `main` still rejects a build for any other clock.
+
 ## Stop
 
-Do not continue into Phase 3 until those results are written down. Phase 3 would be a reviewed fuse proposal, not an automatic fuse write.
+Phase 4 passed. These stay out of scope until the next phase starts:
 
-Still out of scope:
-
-- fuse writing
 - I2C
 - ADC
 - the GM pulse interrupt
