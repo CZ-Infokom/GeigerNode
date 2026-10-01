@@ -154,12 +154,32 @@ make flash
 make verify
 ```
 
+Board 01 passed this step: PD7 blinks 500 ms on and 500 ms off, and PB1 stays low.
+
+## Phase 5B — GM pulse
+
+PD2 / INT0 is an input with the internal pull-up enabled. A falling edge increments a counter. The interrupt does nothing else. Do not connect a Geiger tube for this test.
+
+The LED keeps the 500 ms blink. Each new pulse also toggles PD7, so a burst of edges makes the LED flicker. A wire touched to ground will bounce, so one touch can count more than once.
+
+PD2 is TQFP pin 32. With the board powered and the firmware running:
+
+1. Leave the tube disconnected.
+2. Briefly connect PD2 to GND.
+3. Watch PD7 flicker, then return to the slow blink.
+4. Confirm PB1 stays low.
+
+```sh
+make clean
+make flash
+make verify
+```
+
 ## Stop
 
-GM pulse input, ADC, I2C, and HV stay out of scope:
+ADC, I2C, and HV stay out of scope:
 
 - I2C
 - ADC
-- the GM pulse interrupt
 - HV PWM
 - closed-loop HV regulation

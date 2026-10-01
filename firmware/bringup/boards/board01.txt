@@ -71,3 +71,6 @@ CPU clock is 8 MHz. Makefile default is now F_CPU=8000000UL.
 
 Phase 5A LED, 2026-10-01. Pass.
 The millisecond-tick image was flashed. PD7 blinks with 500 ms on and 500 ms off. PB1 remains low. HV stays off.
+
+Phase 5B GM pulse, 2026-10-01. Pass.
+Falling edges on PD2 increment the counter. The LED blinks on the 500 ms tick and flickers when edges arrive. The tube stayed disconnected. PB1 remains low. HV stays off.
