@@ -46,7 +46,7 @@ AVRDUDE_FLAGS := -p $(AVRDUDE_MCU) -c $(PROGRAMMER) -P $(PORT)
 
 BIN := bin
 
-SRC := src/main.c src/gpio.c src/gm_counter.c
+SRC := src/main.c src/gpio.c src/gm_counter.c src/adc.c
 OBJ := $(patsubst src/%.c,$(BIN)/%.o,$(SRC))
 
 ELF := $(BIN)/$(TARGET).elf
@@ -63,7 +63,7 @@ $(BIN):
 $(ELF): $(OBJ) | $(BIN)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ)
 
-$(BIN)/%.o: src/%.c include/board.h include/gpio.h include/gm_counter.h | $(BIN)
+$(BIN)/%.o: src/%.c include/board.h include/gpio.h include/gm_counter.h include/adc.h | $(BIN)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(HEX): $(ELF)

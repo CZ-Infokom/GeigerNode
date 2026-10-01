@@ -10,8 +10,9 @@
  * LED is PD7.
  * GM_PULSE is PD2 / INT0, active low, falling edge. The pin is an input with a pull-up.
  * PD3 is spare and stays untouched.
+ * HV_ADC is PC0 / ADC0. The converter stays off while it is read.
  * Timer2 is the millisecond tick. Its pin outputs stay disconnected.
- * Timer1, TWI0, and ADC stay disabled.
+ * Timer1 and TWI0 stay disabled.
  */
 
 #define HV_SW_PORT     PORTB

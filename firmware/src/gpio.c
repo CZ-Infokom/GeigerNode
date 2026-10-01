@@ -1,4 +1,5 @@
 #include <avr/io.h>
+#include <stdint.h>
 
 #include "board.h"
 #include "gpio.h"
@@ -10,6 +11,15 @@ void gpio_init(void)
 	HV_SW_DDR |= _BV(HV_SW_DDR_BIT);
 
 	LED_DDR |= _BV(LED_DDR_BIT);
+}
+
+void gpio_led_set(uint8_t on)
+{
+	if (on) {
+		LED_PORT |= _BV(LED_PORT_BIT);
+	} else {
+		LED_PORT &= ~_BV(LED_PORT_BIT);
+	}
 }
 
 void gpio_led_toggle(void)

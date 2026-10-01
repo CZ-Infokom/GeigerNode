@@ -175,11 +175,26 @@ make flash
 make verify
 ```
 
+Board 01 passed this step. Falling edges flicker the LED, then the slow blink returns. PB1 stays low. The tube stayed disconnected.
+
+## Phase 5C — HV ADC, converter off
+
+ADC0 uses the internal 1.1 V reference. The divider is 40 MOhm over 100 kOhm, so about 2 V at the HV node is only a few ADC counts. The converter stays off. Do not enable it for this test.
+
+The LED no longer shows the 500 ms blink. Each sample starts with a longer flash, then one short flash per ADC count. Count the short flashes. A reading above about 10 V at the HV node leaves the LED on after the long flash and does not blink the count.
+
+PC0 is TQFP pin 23. PB1 must stay low.
+
+```sh
+make clean
+make flash
+make verify
+```
+
 ## Stop
 
-ADC, I2C, and HV stay out of scope:
+I2C and HV generation stay out of scope:
 
 - I2C
-- ADC
 - HV PWM
 - closed-loop HV regulation

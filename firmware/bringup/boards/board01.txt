@@ -74,3 +74,7 @@ The millisecond-tick image was flashed. PD7 blinks with 500 ms on and 500 ms off
 
 Phase 5B GM pulse, 2026-10-01. Pass.
 Falling edges on PD2 increment the counter. The LED blinks on the 500 ms tick and flickers when edges arrive. The tube stayed disconnected. PB1 remains low. HV stays off.
+
+Phase 5C HV ADC, 2026-10-01. Pass. Converter stayed off.
+LED pattern: 1 long flash, 5 short flashes. Raw count = 5.
+Using the nominal 1.1 V reference and the 40 MOhm / 100 kOhm divider, raw 5 is 2.15 V at the HV node. The earlier meter reading was 2.1 V. Reference is not calibrated yet.
