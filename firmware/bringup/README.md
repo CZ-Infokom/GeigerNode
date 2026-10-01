@@ -140,11 +140,23 @@ make F_CPU=8000000UL flash
 make F_CPU=8000000UL verify
 ```
 
-Board 01 measured 500 Hz on PD7, and the Makefile default is now `8000000UL`. `main` still rejects a build for any other clock.
+Board 01 measured 500 Hz on PD7, and the Makefile default is now `8000000UL`.
+
+## Phase 5A — LED
+
+One peripheral at a time. This step is the LED only. PB1 stays low. Timer1, TWI, ADC, INT0, and PD3 stay unused.
+
+Timer2 counts milliseconds. Main toggles PD7 every 500 ms, so the LED blinks visibly: 500 ms on, 500 ms off.
+
+```sh
+make clean
+make flash
+make verify
+```
 
 ## Stop
 
-Phase 4 passed. These stay out of scope until the next phase starts:
+GM pulse input, ADC, I2C, and HV stay out of scope:
 
 - I2C
 - ADC

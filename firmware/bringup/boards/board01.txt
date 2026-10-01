@@ -68,3 +68,6 @@ Then `make F_CPU=8000000UL flash` wrote 260 bytes and verify matched.
 PD7 measures 500 Hz. To the eye the LED stays lit, which matches a 500 Hz square wave.
 `make fuses` was run again and re-verified LFUSE 0xE2, HFUSE 0xD9, EFUSE 0xF5.
 CPU clock is 8 MHz. Makefile default is now F_CPU=8000000UL.
+
+Phase 5A LED, 2026-10-01. Pass.
+The millisecond-tick image was flashed. PD7 blinks with 500 ms on and 500 ms off. PB1 remains low. HV stays off.

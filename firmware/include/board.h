@@ -9,7 +9,8 @@
  *
  * LED is PD7.
  * PD3 is spare and stays untouched.
- * Timer2, TWI0, ADC, and INT0 stay disabled during bring-up.
+ * Timer2 is the millisecond tick. Its pin outputs stay disconnected.
+ * Timer1, TWI0, ADC, and INT0 stay disabled.
  */
 
 #define HV_SW_PORT     PORTB
