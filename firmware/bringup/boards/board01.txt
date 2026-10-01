@@ -1,0 +1,31 @@
+GeigerNode board 01 bring-up record
+
+Board identifier: not recorded
+
+Phase 0 signature:
+- Command: make read-signature
+- Programmer: atmelice_isp, port usb, part m328pb
+- Result: 0x1e,0x95,0x16
+- Matches ATmega328PB. Atmel-ICE sees the target.
+- Date: 2026-10-01
+
+Fuses, read 2026-10-01 with make read-fuses. Not modified.
+- LFUSE = 0x62
+- HFUSE = 0xD9
+- EFUSE = 0xF7
+Decoded from ATmega328PB datasheet DS40001906C. These match the shipping defaults.
+- LFUSE 0x62: CKSEL=0010 calibrated internal RC oscillator, nominal 8.0 MHz. SUT=10, slow-rising-power start-up (6 CK + 19 CK + 65 ms). CKOUT unprogrammed, so no clock on PB0. CKDIV8 programmed, so the prescaler starts at divide-by-8.
+- CPU clock = 1.0 MHz. Matching compiler assumption: F_CPU=1000000UL.
+- HFUSE 0xD9: RESET remains RESET (RSTDISBL unprogrammed). debugWIRE disabled (DWEN unprogrammed). ISP enabled (SPIEN programmed). Watchdog not forced on (WDTON unprogrammed). EEPROM not kept through chip erase (EESAVE unprogrammed). BOOTSZ=00, maximum boot size. BOOTRST unprogrammed, so reset starts the application at address 0.
+- EFUSE 0xF7: CFD programmed, which disables clock-failure detection. BODLEVEL=111, brown-out detector disabled. Upper bits are the unused defaults.
+
+Phase 2 flash, 2026-10-01, F_CPU=1000000UL:
+- make flash wrote 240 bytes and verified them
+- make verify checked those 240 bytes again
+- LED on PD7 blinks with a 500 ms toggle. Clock matches 1.0 MHz.
+- PB1 / HV_SW measured LOW. The earlier high report was measurement error.
+- 3.3 V rail: 3.3 V
+- Supply current: reported ok
+- No unexpected heating
+- HV converter off. HV side measures 2.1 V
+- Phase 2 success criteria: pass

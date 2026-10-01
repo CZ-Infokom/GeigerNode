@@ -1,0 +1,20 @@
+# Firmware build output
+firmware/bin/
+
+# Stray build artifacts outside bin/
+*.o
+*.d
+*.elf
+*.hex
+*.eep
+*.lst
+*.map
+*.lss
+*.bin
+
+# Editor and OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
