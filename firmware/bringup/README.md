@@ -215,9 +215,23 @@ i2ctransfer -y <bus> w1@0x66 0x06 r3
 
 Expect address `0x66` to answer, `0x00` to read `0x7d`, and the three-byte read to return `0x00 0x12 0x34`. PB1 stays low.
 
+This bus read has not been done. TWI is untested.
+
+## Phase 6 — coherent radiation registers
+
+The same three bytes are published from one 24-bit value. A read latches all registers at the repeated START, so the three bytes cannot mix two updates. The bring-up value is still `0x001234`. The converter stays off.
+
+```sh
+make clean
+make flash
+make verify
+```
+
+The same `i2cget` and `i2ctransfer` checks apply. There is no new number to expect.
+
 ## Stop
 
-HV generation stays out of scope:
+HV generation stays out of scope until it is explicitly requested:
 
 - HV PWM
 - closed-loop HV regulation

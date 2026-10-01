@@ -5,6 +5,7 @@
 #include "adc.h"
 #include "gm_counter.h"
 #include "gpio.h"
+#include "radsens.h"
 #include "twi_slave.h"
 
 #if F_CPU != 8000000UL
@@ -40,6 +41,7 @@ int main(void)
 	gm_counter_init();
 	adc_init();
 	twi_slave_init();
+	radsens_init();
 	timer2_start_1ms();
 	sei();
 

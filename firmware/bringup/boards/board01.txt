@@ -79,6 +79,6 @@ Phase 5C HV ADC, 2026-10-01. Pass. Converter stayed off.
 LED pattern: 1 long flash, 5 short flashes. Raw count = 5.
 Using the nominal 1.1 V reference and the 40 MOhm / 100 kOhm divider, raw 5 is 2.15 V at the HV node. The earlier meter reading was 2.1 V. Reference is not calibrated yet.
 
-Phase 5D TWI slave, 2026-10-01. Not measured.
-Firmware is written. The user could not connect a master and said to assume it works.
+Phase 5D TWI slave, 2026-10-01. Untested.
+No master was connected. This is not a pass. Do not treat address 0x66 as verified.
 Expected, when a master is available: address 0x66 answers, register 0x00 reads 0x7D, registers 0x06..0x08 read 0x00 0x12 0x34.

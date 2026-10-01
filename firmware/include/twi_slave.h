@@ -1,6 +1,8 @@
 #ifndef TWI_SLAVE_H
 #define TWI_SLAVE_H
 
+#include <stdint.h>
+
 #define TWI_SLAVE_ADDRESS 0x66
 
 /* RadSens device ID. */
@@ -15,5 +17,6 @@
 #define TWI_STATIC_RAD_VALUE 0x001234UL
 
 void twi_slave_init(void);
+void twi_slave_set_static_radiation(uint32_t value_x10);
 
 #endif
