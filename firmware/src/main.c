@@ -5,6 +5,7 @@
 #include "adc.h"
 #include "gm_counter.h"
 #include "gpio.h"
+#include "hv.h"
 #include "radsens.h"
 #include "twi_slave.h"
 
@@ -15,8 +16,8 @@
 /*
  * Timer2 compare interrupt at 1 kHz: 8000000 / (64 * 125).
  * The tick ISR only counts. The TWI ISR only advances the register
- * transaction. Main toggles PD7 every 500 ms.
- * Timer1 stays off. The HV converter stays off.
+ * transaction. Main toggles PD7 every 500 ms while the HV pulse is running.
+ * Timer1 drives PB1 for 10 s, then latches it low. A high ADC reading does too.
  */
 static volatile uint16_t milliseconds;
 
@@ -44,6 +45,7 @@ int main(void)
 	radsens_init();
 	timer2_start_1ms();
 	sei();
+	hv_start(0);
 
 	for (;;) {
 		uint16_t now_ms;
@@ -52,6 +54,11 @@ int main(void)
 		now_ms = milliseconds;
 		sei();
 
+		hv_poll(now_ms);
+		if (hv_is_faulted()) {
+			gpio_led_set(1);
+			continue;
+		}
 		if ((uint16_t)(now_ms - last_toggle_ms) >= 500) {
 			last_toggle_ms = now_ms;
 			gpio_led_toggle();

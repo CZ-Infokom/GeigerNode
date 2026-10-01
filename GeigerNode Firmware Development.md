@@ -17,7 +17,7 @@ PROJECT STATUS
 Last updated: 2026-10-01
 
 Where we are:
-- Work is on local `feature/bringup`, branched from local `dev`. Through Phase 6 is committed here. TWI is untested. `dev` and `main` do not have it yet.
+- Work is on local `feature/bringup`, branched from local `dev`. Through the 25 µs Phase 7 PB1 checks is committed here. TWI is untested. `dev` and `main` do not have it yet.
 - Phase 0 host toolchain is recorded in `firmware/bringup/README.md`. Compiler is `/opt/avr8-gnu-toolchain-4.0.0` (`avr-gcc` `AVR_8_bit_GNU_Toolchain_4.0.0_52`, GCC 15.1.0). `avrdude` is system 8.1 at `/usr/bin/avrdude`. `-mmcu=atmega328pb` works.
 - Section 33 skeleton is in the tree: `firmware/Makefile`, `firmware/README.md`, `firmware/bringup/README.md`, `firmware/include/board.h`, `firmware/src/main.c`. PB1 is forced low and PD7 blinks. `make flash` programs flash only.
 - Host build succeeds with no warnings (`F_CPU=1000000UL`, 240 bytes text). That image was flashed and verified on 2026-10-01.
@@ -28,7 +28,8 @@ Where we are:
 - Phase 5B passed on 2026-10-01. PD2 falling edges increment the counter, and the LED flickers when they arrive. The tube stayed disconnected.
 - Phase 5C passed on 2026-10-01. ADC0 read raw 5 with the converter off (1 long flash, 5 short flashes). Nominal conversion is 2.15 V at the HV node; the meter earlier read 2.1 V.
 - Phase 5D TWI is untested. No master was connected. Do not treat address `0x66` as verified.
-- Phase 6 publishes static radiation from one 24-bit snapshot. A TWI read latches the register bank so `0x06`..`0x08` cannot tear. The value is still `0x001234`. That image has not been flashed. HV stays off.
+- Phase 6 publishes static radiation from one 24-bit snapshot. A TWI read latches the register bank so `0x06`..`0x08` cannot tear. The value is still `0x001234`. That image has not been flashed.
+- Phase 7 open-loop PB1 checks passed on 2026-10-01. Scope: 499.44 Hz, 1.2563% duty, 25.155 µs high, 2.0022 ms period. PB1 is low after reset and after the timed latch. HV output was 43.7 V DC. The next step is a modest open-loop increase toward about 100 V. The 100 µs hard cap stays. Closed loop is not started. The tube stays disconnected.
 
 Checkpoint results:
 - Host toolchain: pass. `avr-gcc` 15.1.0 accepts `atmega328pb`. avrdude 8.1 has `m328pb` and `atmelice_isp`.
@@ -47,6 +48,7 @@ Checkpoint results:
 - Phase 5B GM pulse: pass. 2026-10-01, falling edges on PD2 are counted and the LED flickers. Tube disconnected. PB1 remains low.
 - Phase 5C HV ADC: pass. 2026-10-01, raw 5 with the converter off. Nominal HV-node voltage 2.15 V against an earlier 2.1 V meter reading.
 - Phase 5D TWI: untested. No master was connected. Not a pass.
+- Phase 7 HV open-loop PB1 checks: pass. 2026-10-01 scope: 499.44 Hz, 1.2563% duty, 25.155 µs high, 2.0022 ms period. PB1 low after reset and after the timed latch. HV output at this pulse: 43.7 V DC. Voltage steps toward 100 V have not started.
 
 Decisions that must survive across sessions:
 - Build with `/opt/avr8-gnu-toolchain-4.0.0/bin/avr-gcc`, `avr-objcopy`, and `avr-size`. The `avr-gcc` 12.1.0 on `PATH` is a different install.
@@ -54,7 +56,7 @@ Decisions that must survive across sessions:
 - Saved fuses select the internal 8 MHz RC with CKDIV8 unprogrammed. The measured PD7 frequency is 500 Hz, and the Makefile default is `F_CPU=8000000UL`.
 
 Open blockers:
-- TWI is untested. Do not treat `0x66` as verified until it is read back. The GM tube stays disconnected. HV stays off until Phase 7 is explicitly requested. The 1.1 V ADC reference is not calibrated.
+- TWI is untested. Do not treat `0x66` as verified until it is read back. The GM tube stays disconnected. The next HV step is an open-loop increase toward about 100 V, still under the 100 µs cap. Closed loop stays unstarted. The 1.1 V ADC reference is not calibrated, so the 150 V fault level is nominal.
 
 ======================================================================
 1. HARDWARE

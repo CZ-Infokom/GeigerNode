@@ -82,3 +82,11 @@ Using the nominal 1.1 V reference and the 40 MOhm / 100 kOhm divider, raw 5 is 2
 Phase 5D TWI slave, 2026-10-01. Untested.
 No master was connected. This is not a pass. Do not treat address 0x66 as verified.
 Expected, when a master is available: address 0x66 answers, register 0x00 reads 0x7D, registers 0x06..0x08 read 0x00 0x12 0x34.
+
+Phase 7 HV open-loop, 2026-10-01. PB1 checks pass. Voltage steps not started.
+Image: Timer1 mode 14, ICR1 15999, OCR1A 200. That is 25 us high every 2 ms (500 Hz) for 10 s, then latched low.
+The converter was energized. HV output, DC, read 43.7 V. Earlier, with the converter off, that node was 2.1 V.
+A multimeter frequency function on PB1 read 537 kHz. That is not the pulse rate. The programmed high time is 25 us, and 537 kHz has a period of about 1.9 us, so the meter cannot be reporting that pulse train. A DMM Hz function on a 1.25% duty pulse is not usable here.
+PB1 scope measurement: 499.44 Hz, 1.2563% duty cycle, 25.155 us high time, 2.0022 ms period. Pulse width and period pass.
+User confirmed PB1 is low after reset and after the timed latch, while the LED stays on. Those two checks pass.
+Next open-loop step is a modest pulse-width increase toward about 100 V. The 100 us hard cap stays. Closed loop stays unstarted.

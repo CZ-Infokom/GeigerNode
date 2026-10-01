@@ -1,6 +1,6 @@
 # GeigerNode firmware
 
-Bare-metal bring-up for the ATmega328PB on GeigerNode. This tree blinks the LED on PD7 and holds PB1 (HV_SW) low. It does not enable the high-voltage converter, and it cannot write fuses.
+Bare-metal bring-up for the ATmega328PB on GeigerNode. This tree blinks the LED on PD7 and pulses PB1 (HV_SW) for a timed open-loop check, then latches that pin low. It cannot write fuses.
 
 ## Toolchain
 
@@ -24,7 +24,7 @@ make F_CPU=1000000UL
 make F_CPU=8000000UL
 ```
 
-The Makefile default is `8000000UL`. PD7 on board 01 measured 500 Hz, which confirmed the 8 MHz clock. `main` rejects any other `F_CPU`. The LED blinks every 500 ms. TWI0 answers at address `0x66`: register `0x00` is `0x7D`, and registers `0x06` through `0x08` are `0x00 0x12 0x34`.
+The Makefile default is `8000000UL`. PD7 on board 01 measured 500 Hz, which confirmed the 8 MHz clock. `main` rejects any other `F_CPU`. The LED blinks every 500 ms while the HV pulse is running, then stays on after the pulse latches off. TWI0 is in the image at address `0x66`, and that bus is untested.
 
 Build output goes to `bin/`, which git ignores. `make` builds `bin/geigernode.hex` and prints `avr-size`. `make disasm` writes `bin/geigernode.lst`. `make clean` removes `bin/`.
 
