@@ -5,10 +5,11 @@
 
 /*
  * Open-loop bring-up pulse on PB1 / OC1A.
- * 25 us high, repeated at 500 Hz. The hardware compare match is the
- * pulse-width limit. Nothing in the regulator path can widen it.
+ * 40 us high, repeated at 500 Hz. The 25 us step measured 43.7 V.
+ * 40 us is the next step toward about 100 V. The hardware compare
+ * match is the pulse-width limit. Nothing in the regulator path can widen it.
  */
-#define HV_PULSE_US            25U
+#define HV_PULSE_US            40U
 #define HV_HARD_MAX_PULSE_US   100U
 #define HV_REP_HZ              500U
 

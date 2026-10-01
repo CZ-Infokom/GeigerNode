@@ -231,13 +231,15 @@ The same `i2cget` and `i2ctransfer` checks apply. There is no new number to expe
 
 ## Phase 7 — HV open-loop, scope PB1 first
 
-This image drives the HV switch. Disable the HV power stage if the board allows it, so the first PB1 check runs without energizing the converter. Current-limit the board supply before flashing. Leave the GM tube disconnected. TWI stays untested; do not use this step to judge the bus.
+This image drives the HV switch with the converter energized. Current-limit the board supply before flashing. Leave the GM tube disconnected. TWI stays untested; do not use this step to judge the bus.
 
 Probe PB1 with a short ground spring at the MCU ground, not a long clip lead. Trigger on the rising edge. Use about 10 µs/div for the high time and 1 ms/div for the period. Read the waveform. Do not rely on the scope's automatic frequency number.
 
-PB1 (TQFP pin 13) goes high for 25 µs, every 2 ms (500 Hz), for 10 seconds. Then firmware disconnects OC1A and holds PB1 low, and the LED stays on. The same latch happens sooner if the nominal HV-node reading reaches 150 V. The 1.1 V reference is not calibrated, so that ceiling is approximate. The compare match is capped at 100 µs and does not depend on a regulator.
+The 25 µs image measured 43.7 V at the HV output. This image widens the pulse to 40 µs and leaves the repetition at 500 Hz. That is the next step toward about 100 V. The 100 µs compare-match cap is unchanged.
 
-Scope the MCU pin. A multimeter frequency function will not read this pulse: the duty cycle is 1.25%, and on 2026-10-01 that function showed 537 kHz on PB1 while the HV output was 43.7 V DC. Do not use this step to chase a target voltage, and do not start closed-loop control.
+PB1 (TQFP pin 13) goes high for 40 µs, every 2 ms, for 10 seconds. Then firmware disconnects OC1A and holds PB1 low, and the LED stays on. The same latch happens sooner if the nominal HV-node reading reaches 150 V. The 1.1 V reference is not calibrated, so that ceiling is approximate. The compare match does not depend on a regulator.
+
+Scope the MCU pin. A multimeter frequency function will not read this pulse. On the 25 µs image that function showed 537 kHz on PB1. Read the HV voltage with a proper probe while the LED is blinking. Do not start closed-loop control.
 
 ```sh
 make clean
@@ -247,7 +249,7 @@ make verify
 
 Record:
 
-1. PB1 high time is 25 µs.
+1. PB1 high time is 40 µs. Measure the HV output while the LED is still blinking.
 2. PB1 period is 2 ms.
 3. Reset or power-cycle leaves PB1 low. Pulses may start again only after firmware restarts the 10 s window.
 4. When the LED stays on, PB1 stays low.
