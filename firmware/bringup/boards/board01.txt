@@ -29,3 +29,35 @@ Phase 2 flash, 2026-10-01, F_CPU=1000000UL:
 - No unexpected heating
 - HV converter off. HV side measures 2.1 V
 - Phase 2 success criteria: pass
+
+Phase 3 fuse proposal, 2026-10-01. Not written. Not approved.
+Source: ATmega328PB datasheet DS40001906C. Speed grade allows 0-10 MHz at 2.7-5.5 V, so 8 MHz is valid on the measured 3.3 V rail.
+
+CURRENT:
+- LFUSE = 0x62
+- HFUSE = 0xD9
+- EFUSE = 0xF7
+
+PROPOSED:
+- LFUSE = 0xE2
+- HFUSE = 0xD9
+- EFUSE = 0xF5
+
+Changed bits:
+- LFUSE bit 7, CKDIV8: programmed (0) -> unprogrammed (1). CPU clock becomes 8.0 MHz. CKSEL stays 0010. SUT stays 10. CKOUT stays unprogrammed.
+- EFUSE BODLEVEL[2:0]: 111 -> 101. Brown-out trigger becomes 2.5 / 2.7 / 2.9 V (min / typ / max). CFD stays disabled. Unused EFUSE bits stay 1.
+- HFUSE: no change. SPIEN stays programmed, RSTDISBL stays unprogrammed, DWEN stays unprogrammed.
+
+Rejected BODLEVEL values for this rail:
+- 100 (typ 4.3 V) would hold the 3.3 V part in reset.
+- 110 (typ 1.8 V) would allow 8 MHz operation below the 2.7 V speed-grade limit.
+- 011-000 are reserved.
+
+Approved 2026-10-01 for LFUSE 0xE2, HFUSE 0xD9, EFUSE 0xF5.
+Written the same day with `make fuses`. avrdude reported each byte written and verified.
+Read-back:
+- signature 0x1e,0x95,0x16
+- LFUSE 0xe2
+- HFUSE 0xd9
+- EFUSE 0xf5
+ISP still works. The image then on the chip was still the F_CPU=1000000UL build.

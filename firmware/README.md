@@ -45,6 +45,6 @@ make verify
 make fuses
 ```
 
-That target always fails. Fuse programming stays a separate step after the saved bytes are decoded and a person approves the new values.
+That target writes only the approved bytes: LFUSE `0xE2`, HFUSE `0xD9`, EFUSE `0xF5`. It does not program flash. Do not change those three values without a new review.
 
 Follow `bringup/README.md` before connecting the programmer or flashing.

@@ -17,12 +17,13 @@ PROJECT STATUS
 Last updated: 2026-10-01
 
 Where we are:
-- Work is on local `feature/bringup`, branched from local `dev` (same commit as `main`). This bring-up skeleton and the Phase 2 record are committed on `feature/bringup`. `dev` and `main` do not have it yet.
+- Work is on local `feature/bringup`, branched from local `dev`. Phase 2 and the approved fuse write are committed here. `dev` and `main` do not have them yet.
 - Phase 0 host toolchain is recorded in `firmware/bringup/README.md`. Compiler is `/opt/avr8-gnu-toolchain-4.0.0` (`avr-gcc` `AVR_8_bit_GNU_Toolchain_4.0.0_52`, GCC 15.1.0). `avrdude` is system 8.1 at `/usr/bin/avrdude`. `-mmcu=atmega328pb` works.
-- Section 33 skeleton is in the tree: `firmware/Makefile`, `firmware/README.md`, `firmware/bringup/README.md`, `firmware/include/board.h`, `firmware/src/main.c`. PB1 is forced low, PD7 blinks, and `make fuses` cannot write fuses.
+- Section 33 skeleton is in the tree: `firmware/Makefile`, `firmware/README.md`, `firmware/bringup/README.md`, `firmware/include/board.h`, `firmware/src/main.c`. PB1 is forced low and PD7 blinks. `make flash` programs flash only.
 - Host build succeeds with no warnings (`F_CPU=1000000UL`, 240 bytes text). That image was flashed and verified on 2026-10-01.
 - Phase 2 has passed. Signature, fuses, flash, verify, PD7 blink, PB1 low, 3.3 V rail, supply current, no heating, and HV converter inactive are recorded in `firmware/bringup/boards/board01.txt`.
-- Next allowed task is Phase 3, section 18: a fuse proposal only, after an explicit request. Do not write fuses.
+- Phase 3 fuses were written on 2026-10-01 with `make fuses` and read back as LFUSE `0xE2`, HFUSE `0xD9`, EFUSE `0xF5`. Signature remained `0x1E9516`. `make flash` still programs flash only.
+- Next step is Phase 4: measure a timer-derived frequency on a scope or logic analyzer and confirm the CPU clock is about 8 MHz before changing the `F_CPU` default.
 
 Checkpoint results:
 - Host toolchain: pass. `avr-gcc` 15.1.0 accepts `atmega328pb`. avrdude 8.1 has `m328pb` and `atmelice_isp`.
@@ -35,14 +36,15 @@ Checkpoint results:
 - Supply current: pass, reported ok. No unexpected heating.
 - HV converter: inactive. HV side measures 2.1 V.
 - Phase 2: pass.
+- Phase 3 fuse write: pass. 2026-10-01 read-back LFUSE `0xE2`, HFUSE `0xD9`, EFUSE `0xF5`, signature `0x1E9516`.
 
 Decisions that must survive across sessions:
 - Build with `/opt/avr8-gnu-toolchain-4.0.0/bin/avr-gcc`, `avr-objcopy`, and `avr-size`. The `avr-gcc` 12.1.0 on `PATH` is a different install.
 - `avrdude` stays `/usr/bin/avrdude` 8.1. It is not in the toolchain tree.
-- This board's saved fuses select a 1.0 MHz CPU clock. Flash Phase 2 with `F_CPU=1000000UL`. Do not change that until a reviewed fuse write actually removes CKDIV8.
+- Saved fuses now select the internal 8 MHz RC with CKDIV8 unprogrammed. Keep the Makefile `F_CPU` default at `1000000UL` until a Phase 4 scope measurement confirms about 8 MHz.
 
 Open blockers:
-- Fuse write still needs a reviewed proposal and explicit human approval. Phase 3 has not started.
+- Phase 4 clock measurement is not done. Do not set the project default to `F_CPU=8000000UL` until PD7 is measured.
 
 ======================================================================
 1. HARDWARE
@@ -579,24 +581,15 @@ which creates a human-readable AVR disassembly.
 12. MAKEFILE FUSE PROTECTION
 ======================================================================
 
-There must be NO normal fuse-writing target.
+`make read-fuses` only reads.
 
-If a target named:
+`make fuses` may write only the Phase 3 bytes approved on 2026-10-01:
 
-    make fuses
+    LFUSE = 0xE2
+    HFUSE = 0xD9
+    EFUSE = 0xF5
 
-exists, it must FAIL intentionally and print something like:
-
-    ERROR: Fuse programming is intentionally disabled.
-    Read and review ATmega328PB fuse values first.
-
-DO NOT put a fuse-writing avrdude command behind that target.
-
-The only fuse-related target initially allowed is:
-
-    make read-fuses
-
-It should only READ.
+It must not program flash. Any other fuse value needs a new decode and a new explicit approval before the Makefile changes.
 
 Example semantics:
 

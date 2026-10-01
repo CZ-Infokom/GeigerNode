@@ -103,10 +103,17 @@ toolchain-info:
 disasm: $(ELF)
 	$(OBJDUMP) -d -S $< > $(LST)
 
+# Approved 2026-10-01 for this board. Do not change these bytes without a new review.
+# This target writes fuses only. It does not program flash.
+LFUSE := 0xE2
+HFUSE := 0xD9
+EFUSE := 0xF5
+
 fuses:
-	@echo "ERROR: Fuse programming is intentionally disabled."
-	@echo "Read and review ATmega328PB fuse values first."
-	@exit 1
+	$(AVRDUDE) $(AVRDUDE_FLAGS) \
+		-U lfuse:w:$(LFUSE):m \
+		-U hfuse:w:$(HFUSE):m \
+		-U efuse:w:$(EFUSE):m
 
 clean:
 	rm -rf $(BIN)
