@@ -1,6 +1,6 @@
 # GeigerNode firmware
 
-Bare-metal bring-up for the ATmega328PB on GeigerNode. This tree blinks the LED on PD7 and pulses PB1 (HV_SW) for a timed open-loop check, then latches that pin low. It cannot write fuses.
+Bare-metal bring-up for the ATmega328PB on GeigerNode. Characterization is frozen: nominal target 380 V, nominal frequency about 2400–2500 Hz, pulse cap 100 µs, production abort around 400 V. The image on the chip already ran the last 400 V sweep and latched COMPLETE. Flashing it again chip-erases EEPROM and starts that sweep once more. `make read-freq-series` prints the record. `make arm-freq-series` is the only re-arm. It cannot write fuses.
 
 ## Toolchain
 
@@ -24,7 +24,7 @@ make F_CPU=1000000UL
 make F_CPU=8000000UL
 ```
 
-The Makefile default is `8000000UL`. PD7 on board 01 measured 500 Hz, which confirmed the 8 MHz clock. `main` rejects any other `F_CPU`. The LED blinks every 500 ms while the HV pulse is running, then stays on after the pulse latches off. TWI0 is in the image at address `0x66`, and that bus is untested.
+The Makefile default is `8000000UL`. PD7 on board 01 measured 500 Hz, which confirmed the 8 MHz clock. `main` rejects any other `F_CPU`. A fast PD7 blink is the 5 s armed delay. The LED stays on while a test is switching, blinks slowly during each 10 s off interval, stays on when the series is complete, and shows a grouped blink after an abort. TWI0 is in the image at address `0x66`, and that bus is untested.
 
 Build output goes to `bin/`, which git ignores. `make` builds `bin/geigernode.hex` and prints `avr-size`. `make disasm` writes `bin/geigernode.lst`. `make clean` removes `bin/`.
 

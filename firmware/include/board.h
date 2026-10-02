@@ -11,10 +11,12 @@
  * LED is PD7.
  * GM_PULSE is PD2 / INT0, active low, falling edge. The pin is an input with a pull-up.
  * PD3 is spare and stays untouched.
- * HV_ADC is PC0 / ADC0. The converter stays off while it is read.
+ * HV_ADC is PC0 / ADC0. The default image leaves the converter off while it is read.
  * TWI0 slave address is 0x66. SDA is PC4 and SCL is PC5.
  * Timer2 is the millisecond tick. Its pin outputs stay disconnected.
- * Timer1 is the open-loop HV pulse. Its hard maximum width is 100 us.
+ * Timer1 is the HV pulse. Its hard maximum width is 100 us.
+ * The series regulates 400 V from 2500 Hz through 3000 Hz in 100 Hz steps.
+ * Pulse width stays at or below 100 us. It starts only from blank or ARMED EEPROM.
  */
 
 #define HV_SW_PORT     PORTB

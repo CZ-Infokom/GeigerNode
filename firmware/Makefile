@@ -53,7 +53,7 @@ ELF := $(BIN)/$(TARGET).elf
 HEX := $(BIN)/$(TARGET).hex
 LST := $(BIN)/$(TARGET).lst
 
-.PHONY: all clean size flash verify read-signature read-fuses toolchain-info disasm fuses
+.PHONY: all clean size flash verify read-signature read-fuses toolchain-info disasm fuses read-hv-test read-freq-series arm-freq-series
 
 all: $(HEX) size
 
@@ -114,6 +114,32 @@ fuses:
 		-U lfuse:w:$(LFUSE):m \
 		-U hfuse:w:$(HFUSE):m \
 		-U efuse:w:$(EFUSE):m
+
+# Read the one closed-loop result record. This does not write flash or fuses.
+read-hv-test:
+	mkdir -p $(BIN)
+	$(AVRDUDE) $(AVRDUDE_FLAGS) -U eeprom:r:$(BIN)/hv-test.bin:r
+	python3 bringup/read_hv_test.py $(BIN)/hv-test.bin
+
+# Read the frequency series. EEPROM read only. A reset cannot re-arm a
+# COMPLETE or ABORTED series. Reading while the series is RUNNING aborts it.
+read-freq-series:
+	mkdir -p $(BIN)
+	$(AVRDUDE) $(AVRDUDE_FLAGS) -U eeprom:r:$(BIN)/freq-series.bin:r
+	python3 bringup/read_freq_series.py $(BIN)/freq-series.bin
+
+# Explicit re-arm. Changes the EEPROM arm word and checksum only, or writes
+# one new ARMED record when EEPROM has no valid series. Does not write fuses
+# or flash. The programmer reset that follows starts the 5 s delay.
+arm-freq-series:
+	mkdir -p $(BIN)
+	$(AVRDUDE) $(AVRDUDE_FLAGS) -U eeprom:r:$(BIN)/freq-series.bin:r
+	python3 bringup/arm_freq_series.py $(BIN)/freq-series.bin $(BIN)/arm-cmds.txt
+	@if [ ! -s $(BIN)/arm-cmds.txt ]; then \
+		echo "EEPROM was already ARMED. No EEPROM bytes were written."; \
+		exit 0; \
+	fi
+	$(AVRDUDE) $(AVRDUDE_FLAGS) -t < $(BIN)/arm-cmds.txt
 
 clean:
 	rm -rf $(BIN)

@@ -15,9 +15,9 @@
 
 /*
  * Timer2 compare interrupt at 1 kHz: 8000000 / (64 * 125).
- * The tick ISR only counts. The TWI ISR only advances the register
- * transaction. Main toggles PD7 every 500 ms while the HV pulse is running.
- * Timer1 drives PB1 for 10 s, then latches it low. A high ADC reading does too.
+ * The tick ISR only counts. Main samples HV_ADC and updates OCR1A.
+ * One-shot series at 400 V: 2500 Hz through 3000 Hz in 100 Hz steps.
+ * Each test is 10 s, with 10 s off between tests. A fault latches PB1 low.
  */
 static volatile uint16_t milliseconds;
 
@@ -34,9 +34,28 @@ static void timer2_start_1ms(void)
 	TIMSK2 = _BV(OCIE2A);
 }
 
+static void led_fault(uint16_t now_ms, uint16_t *last_ms, uint8_t *phase)
+{
+	static const uint16_t dwell_ms[9] = {
+		100, 100, 100, 100, 100, 100, 100, 100, 700
+	};
+	static const uint8_t level[9] = {
+		1, 0, 1, 0, 1, 0, 1, 0, 0
+	};
+
+	if ((uint16_t)(now_ms - *last_ms) < dwell_ms[*phase]) {
+		return;
+	}
+	*last_ms = now_ms;
+	*phase = (uint8_t)((*phase + 1U) % 9U);
+	gpio_led_set(level[*phase]);
+}
+
 int main(void)
 {
 	uint16_t last_toggle_ms = 0;
+	uint8_t fault_phase = 0;
+	uint8_t last_mode = 0xFF;
 
 	gpio_init();
 	gm_counter_init();
@@ -45,23 +64,47 @@ int main(void)
 	radsens_init();
 	timer2_start_1ms();
 	sei();
-	hv_start(0);
+	hv_series_boot();
 
 	for (;;) {
 		uint16_t now_ms;
+		uint8_t mode;
 
 		cli();
 		now_ms = milliseconds;
 		sei();
 
-		hv_poll(now_ms);
-		if (hv_is_faulted()) {
+		hv_series_poll(now_ms);
+		mode = hv_series_indicator();
+		if (mode != last_mode) {
+			last_mode = mode;
+			last_toggle_ms = now_ms;
+			fault_phase = 0;
+			gpio_led_set(mode == HV_LED_ON || mode == HV_LED_FAULT);
+			continue;
+		}
+		if (mode == HV_LED_ON) {
 			gpio_led_set(1);
 			continue;
 		}
-		if ((uint16_t)(now_ms - last_toggle_ms) >= 500) {
-			last_toggle_ms = now_ms;
-			gpio_led_toggle();
+		if (mode == HV_LED_FAST) {
+			if ((uint16_t)(now_ms - last_toggle_ms) >= 100) {
+				last_toggle_ms = now_ms;
+				gpio_led_toggle();
+			}
+			continue;
 		}
+		if (mode == HV_LED_SLOW) {
+			if ((uint16_t)(now_ms - last_toggle_ms) >= 500) {
+				last_toggle_ms = now_ms;
+				gpio_led_toggle();
+			}
+			continue;
+		}
+		if (mode == HV_LED_FAULT) {
+			led_fault(now_ms, &last_toggle_ms, &fault_phase);
+			continue;
+		}
+		gpio_led_set(0);
 	}
 }
