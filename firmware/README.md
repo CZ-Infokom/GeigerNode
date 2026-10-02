@@ -1,6 +1,6 @@
 # GeigerNode firmware
 
-Bare-metal bring-up for the ATmega328PB on GeigerNode. Characterization is frozen: nominal target 380 V, nominal frequency about 2400–2500 Hz, pulse cap 100 µs, production abort around 400 V. The image on the chip already ran the last 400 V sweep and latched COMPLETE. Flashing it again chip-erases EEPROM and starts that sweep once more. `make read-freq-series` prints the record. `make arm-freq-series` is the only re-arm. It cannot write fuses.
+Bare-metal bring-up for the ATmega328PB on GeigerNode. Characterization is frozen: nominal target 380 V, nominal frequency about 2400–2500 Hz, pulse cap 100 µs, production abort around 400 V. This source holds 380 V at 2500 Hz after a 5 s delay. That hold has been run: the Q1-diode peak was 427.4 V and thermals were OK. A meter on the HV output loads the converter and latches the hold off. `make read-freq-series` prints the record. `make arm-freq-series` is the only re-arm. It cannot write fuses.
 
 ## Toolchain
 

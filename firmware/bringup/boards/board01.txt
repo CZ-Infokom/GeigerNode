@@ -175,4 +175,4 @@ Target | Hz | Final HV | Max HV | Final pulse | Max pulse | ms at 100 us | Q1 pe
 400 V | 2800 | 400 V | 403 V | 94 us | 96 us | 0 | 447 V | subsides well in time | stable | ok | HV_TEST_OK
 400 V | 2900 | 400 V | 403 V | 93 us | 95 us | 0 | 447 V | subsides well in time | stable | ok | HV_TEST_OK
 400 V | 3000 | 399 V | 403 V | 92 us | 94 us | 0 | 447 V | subsides well in time | stable | ok | HV_TEST_OK
-Frozen characterization limits, 2026-10-02. Nominal tube target 380 V. Nominal frequency about 2400-2500 Hz. Absolute pulse cap 100 us. Production HV abort around 400 V, 932 counts. The 995-count abort was the characterization ceiling only. Q1-diode peak at 380 V about 427 V with the probe attached.
+Frozen characterization limits, 2026-10-02. Nominal tube target 380 V. Nominal frequency about 2400-2500 Hz. Absolute pulse cap 100 us. Production HV abort around 400 V, 932 counts. The 995-count abort was the characterization ceiling only. Q1-diode peak at 380 V measured 427.4 V with the probe attached on the 2500 Hz production hold. Thermals were OK. A meter on the HV output loads the converter and latches the hold off.

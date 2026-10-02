@@ -16,8 +16,8 @@
 /*
  * Timer2 compare interrupt at 1 kHz: 8000000 / (64 * 125).
  * The tick ISR only counts. Main samples HV_ADC and updates OCR1A.
- * One-shot series at 400 V: 2500 Hz through 3000 Hz in 100 Hz steps.
- * Each test is 10 s, with 10 s off between tests. A fault latches PB1 low.
+ * Production hold: PB1 stays low for 5 s, then Timer1 regulates 380 V
+ * at 2500 Hz. A fault latches PB1 low with no restart.
  */
 static volatile uint16_t milliseconds;
 
@@ -64,7 +64,9 @@ int main(void)
 	radsens_init();
 	timer2_start_1ms();
 	sei();
-	hv_series_boot();
+	uint8_t bench_started = 0;
+
+	hv_bench_boot();
 
 	for (;;) {
 		uint16_t now_ms;
@@ -74,8 +76,20 @@ int main(void)
 		now_ms = milliseconds;
 		sei();
 
-		hv_series_poll(now_ms);
-		mode = hv_series_indicator();
+		if (!bench_started) {
+			if (now_ms < HV_SERIES_ARM_DELAY_MS) {
+				mode = HV_LED_FAST;
+			} else if (!hv_bench_start(now_ms)) {
+				bench_started = 1;
+				mode = HV_LED_FAULT;
+			} else {
+				bench_started = 1;
+				mode = HV_LED_ON;
+			}
+		} else {
+			hv_bench_poll(now_ms);
+			mode = hv_bench_indicator();
+		}
 		if (mode != last_mode) {
 			last_mode = mode;
 			last_toggle_ms = now_ms;

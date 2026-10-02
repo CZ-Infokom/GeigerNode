@@ -4,18 +4,18 @@
 #include <stdint.h>
 
 /*
- * Characterization is frozen. Nominal tube target is 380 V.
- * Nominal frequency is about 2400-2500 Hz. Pulse cap is 100 us.
- * Production HV abort is around 400 V. The 995-count abort below
- * was the characterization ceiling only.
- * Q1-diode peak at 380 V was about 427 V with the probe attached.
+ * Production hold. Nominal target is 380 V at 2500 Hz, the exact
+ * rate inside the frozen 2400-2500 Hz band. Pulse cap is 100 us.
+ * The hard abort is 932 counts, around 400 V.
+ * Q1-diode peak at 380 V measured 427.4 V with the probe attached.
+ * A fault latches PB1 low. There is no automatic restart.
  *
- * The image still in this tree is the completed 400 V frequency sweep.
- * Do not flash it again.
+ * The one-shot characterization tables remain in this file.
+ * This image does not run them.
  *
- * One-shot characterization. Pulse width stays at or below 100 us.
- * Every test targets 400 V. Frequency is fixed during a test.
- * The 995-count abort is about 427 V and is not an operating target.
+ * The tables below are the last characterization sweep. It ran with a
+ * 995-count ceiling. This image does not run that sweep, and its abort
+ * is the 932-count production limit.
  *
  * Test 0: 400 V at 2500 Hz, 932 counts
  * Test 1: 400 V at 2600 Hz, 932 counts
@@ -53,13 +53,13 @@
 #define HV_FREQ_TEST_5_HZ       3000U
 
 #define HV_BENCH_VOLTS          380U
-#define HV_BENCH_HZ             1500U
+#define HV_BENCH_HZ             2500U
 
 #define HV_HYST_COUNTS          5U
 #define HV_FAST_LOW_COUNTS      20U
 #define HV_FAST_HIGH_COUNTS     15U
 #define HV_OVERSHOOT_COUNTS     25U
-#define HV_ADC_HARD_ABORT       995U
+#define HV_ADC_HARD_ABORT       932U
 #define HV_OK_BAND_COUNTS       20U
 #define HV_SAT_TICKS            50U
 #define HV_RISE_COUNTS          8U

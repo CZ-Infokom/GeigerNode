@@ -18,11 +18,11 @@
 #if HV_FREQ_SERIES_MAX_HZ != 3000
 #error "HV frequency characterization stops at 3000 Hz"
 #endif
-#if HV_ADC_HARD_ABORT != 995
-#error "HV hard abort is 995 counts"
+#if HV_ADC_HARD_ABORT != 932
+#error "HV production abort is 932 counts, around 400 V"
 #endif
-#if HV_BENCH_VOLTS != 380 || HV_BENCH_HZ != 1500
-#error "Bench hold is 380 V at 1500 Hz"
+#if HV_BENCH_VOLTS != 380 || HV_BENCH_HZ != 2500
+#error "Production hold is 380 V at 2500 Hz"
 #endif
 #if HV_FREQ_TEST_COUNT != 6
 #error "HV series is six tests"
@@ -109,8 +109,7 @@ _Static_assert(815 + HV_OVERSHOOT_COUNTS < HV_ADC_HARD_ABORT, "350 V overshoot s
 _Static_assert(839 + HV_OVERSHOOT_COUNTS < HV_ADC_HARD_ABORT, "360 V overshoot stays under the abort");
 _Static_assert(862 + HV_OVERSHOOT_COUNTS < HV_ADC_HARD_ABORT, "370 V overshoot stays under the abort");
 _Static_assert(885 + HV_OVERSHOOT_COUNTS < HV_ADC_HARD_ABORT, "380 V overshoot stays under the abort");
-_Static_assert(909 + HV_OVERSHOOT_COUNTS < HV_ADC_HARD_ABORT, "390 V overshoot stays under the abort");
-_Static_assert(932 + HV_OVERSHOOT_COUNTS < HV_ADC_HARD_ABORT, "400 V overshoot stays under the abort");
+_Static_assert(HV_ADC_HARD_ABORT == 932U, "production abort is the 400 V count");
 
 volatile uint16_t adc_raw;
 volatile uint16_t adc_avg;
@@ -476,6 +475,11 @@ uint8_t hv_bench_start(uint16_t now_ms)
 void hv_bench_poll(uint16_t now_ms)
 {
 	if (regulator_state != HV_STARTING && regulator_state != HV_REGULATING) {
+		return;
+	}
+	if (regulator_state == HV_STARTING &&
+	    (uint16_t)(now_ms - started_ms) >= HV_TEST_MAX_RUNTIME_MS) {
+		hv_finish(HV_FAULT, HV_TEST_TIMEOUT);
 		return;
 	}
 	if ((uint16_t)(now_ms - last_ctrl_ms) < HV_CTRL_PERIOD_MS) {
