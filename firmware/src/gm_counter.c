@@ -25,7 +25,7 @@ _Static_assert(GM_BLANKING_US == 0U, "software dead time stays off");
 
 const struct gm_tube_profile gm_tube_si29bg __attribute__((used)) = {
 	GM_TUBE_SI29BG_HV_V,
-	GM_TUBE_SI29BG_SENSITIVITY_UNUSED
+	RADIATION_SI29BG_SENSITIVITY_X10
 };
 
 static volatile uint32_t t0_ovf;

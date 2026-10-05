@@ -1,6 +1,6 @@
 # GeigerNode bring-up
 
-Current step: the SI-29BG 10-minute background run. The 60 s path test passed. The tube stays installed. Do not rerun the earlier HV ladders. Do not raise the target above 380 V, the rate above 2400 Hz, or the pulse cap above 100 µs.
+Current step: the SI-29BG factory coefficient `S = 137.5 impulses/µR` is accepted. The RadiaCode comparison did not converge across geometry, so that datasheet value stays. The one-shot image does not convert counts to dose. The tube stays installed. Do not rerun the earlier HV ladders. Do not raise the target above 380 V, the rate above 2400 Hz, or the pulse cap above 100 µs.
 
 The sections below are the historical bring-up record. Fuses were written once and are not to be changed.
 
@@ -731,3 +731,104 @@ Passed on 2026-10-05 with the source away. `make read-gm-test` reported GM_TEST_
 | Time at 100 µs | 0 ms |
 
 The only short gap is 156 µs, the same recovery delay as the earlier logs. A steady 7.5 CPM expects about 0.002 gaps under 200 µs, so this one edge is still the companion, and it is the only one in 75 pulses. The 417 µs switching bin is empty. Final ADC 885 is 380 V; the reader prints that count as 379 V. Blanking stayed 0. PD2 persistence on this run shows one long low pulse, a slow rise near 150–200 µs, and one narrow tick on that rise.
+
+## Provisional tube sensitivity basepoints
+
+These are engineering starting values, not traceable calibrations. Keep the raw
+CPM available and keep the tube coefficient configurable.
+
+For the installed SI-29BG, use `S = 137.5 impulses/µR` as the provisional
+Cs-137 datasheet basepoint. Published limits are 122.5–177.5 impulses/µR
+(550 +160/-60 counts/s at 4 µR/s). With the project conversion
+`µR/h = CPM * 60 / S`, the nominal factors are:
+
+- `µR/h = CPM * 0.43636`
+- RadSens raw tenths of µR/h: `raw = CPM * 600 / 137.5`
+- for orientation only, using 1 µR ≈ 0.00877 µSv for gamma in air:
+  `µSv/h ≈ CPM * 0.003827`, or about 261 CPM per µSv/h
+
+The published SI-29BG sensitivity is specified at 400 V. This board stays at
+the frozen 380 V / 2400 Hz point. The published plateau slope is at most
+0.125%/V, so the 20 V difference alone permits roughly 2.5% response change,
+in addition to tube spread, source spectrum, geometry, and the board's
+100–200 µs recovery companions. Do not change HV to match the datasheet.
+
+For a future SBM-20 (sometimes mistyped SBN20), use `S = 65 impulses/µR` as a
+rough Cs-137 midpoint. Published Cs-137 response is 240–280 counts/s at
+4 µR/s, equivalent to 60–70 impulses/µR. Its nominal starting factors are:
+
+- `µR/h = CPM * 0.92308`
+- RadSens raw tenths of µR/h: `raw = CPM * 600 / 65`
+- for orientation only: `µSv/h ≈ CPM * 0.008095`, or about 124 CPM per µSv/h
+
+Published SBM-20 electrical values are 400 V recommended, 350–475 V operating
+range, 190 µs dead time at 400 V, and 5.1 MΩ recommended anode resistance.
+Those values do not authorize a tube swap or a change to this board's frozen
+limits. Review the installed ballast and repeat controlled tube bring-up when
+the SBM-20 arrives.
+
+Sources consulted 2026-10-05:
+
+- [SI-29BG specification](https://www.etalonpribor.ru/catalog/rashodomeri/product/si-29bg_schetchik_geygera-myullera_/)
+- [SI-29BG cross-check](https://gstube.com/data/2484/)
+- [SBM-20 specification](https://gstube.com/data/2398)
+
+## RadiaCode comparison checkpoint
+
+A gas-lamp mantle can provide a repeatable check field, but it is not a
+calibrated source. Do not burn, cut, crumble, or remove material from it. Keep
+it sealed in its existing enclosure or a closed bag/container and minimize
+handling. The RadiaCode comparison transfers that instrument's indicated
+gamma dose rate under one spectrum and geometry; it does not create a
+traceable calibration.
+
+Use the existing 600 s GeigerNode window. Do not modify firmware, HV, blanking,
+or dead time for this checkpoint.
+
+1. Mark one position on the table. On 2026-10-05 the arrangement is flat:
+   paper-wrapped mantle, 5 mm aluminum plate, and the detector 3 cm from the
+   plate. RadiaCode reads about 200 nSv/h (0.20 µSv/h) there. Plate contact
+   was about 0.8 µSv/h and is a different position. Mark the mantle, the
+   plate, and the 3 cm detector point. The middle of the SI-29BG tube uses
+   that same point.
+2. Take the mantle to another room. Accumulate a RadiaCode spectrum at the
+   marked spot for the same 600 s used by GeigerNode, and record its average
+   µSv/h. Run one GeigerNode 600 s background window at that spot. Retain the
+   raw pulse count.
+3. Return the mantle and plate to their marks. Put the RadiaCode on the
+   detector mark, start a fresh spectrum, and record the 600 s average µSv/h.
+   Then put the SI-29BG tube center on that same mark and run one armed 600 s
+   window. Do not ISP-read until the LED is steady.
+4. Repeat that RadiaCode-then-GeigerNode pair once without moving the mantle
+   or the plate. Record every spectrum, accumulation time, average µSv/h, and
+   raw GeigerNode pulse count. Use the spectrum average, not the live display.
+5. Subtract each instrument's own background before forming a ratio. Compare
+   the two source pairs. A spread above 10% means the placement moved; do not
+   replace the provisional coefficient from one pair alone.
+
+Background for this checkpoint, recorded 2026-10-05 with the mantle in another
+room: GeigerNode 91 measurement pulses, 9.1 CPM, GM_TEST_OK. RadiaCode
+accumulated 10 nSv in 10 min, which is 0.060 µSv/h. Use these two values as
+`background_CPM` and `background_RadiaCode_uSv_h`. The seven 154–170 µs gaps
+stay in the raw count.
+
+The 3 cm pair, 2026-10-05: 231 measurement pulses, 23.1 CPM, GM_TEST_OK, and
+RadiaCode 20 nSv in 10 min, or 0.120 µSv/h. Both were at 3 cm. Net 14.0 CPM
+and 0.060 µSv/h gives about 233 CPM per µSv/h and `S_empirical` about 123
+impulses/µR. The live 200 nSv/h display was high. Keep 137.5. The direct position, 2026-10-05: RadiaCode 10-minute average 0.50 µSv/h, GeigerNode 650 measurement pulses, 65.0 CPM, GM_TEST_EXCESSIVE_FAST_PULSES. Net 55.9 CPM and 0.440 µSv/h gives about 127 CPM per µSv/h and `S_empirical` about 67 impulses/µR. Five gaps were under 50 µs, with 33 µs stored; 53 gaps were the usual 100–200 µs recovery. The results do not converge across geometry: 233 CPM per µSv/h at 3 cm versus 127 in contact. The 3 cm result is consistent with the published lower sensitivity limit, while contact is not a valid coefficient transfer because the radiation field varies sharply across the RadiaCode and the long SI-29BG sensitive volumes. The checkpoint is inconclusive, not evidence that the datasheet coefficient is wrong. Keep 137.5 impulses/µR. Do not add dead time or convert CPM to dose from this checkpoint.
+
+For each paired run:
+
+```text
+delta_CPM = source_CPM - background_CPM
+delta_uSv_h = source_RadiaCode_uSv_h - background_RadiaCode_uSv_h
+GeigerNode_uSv_per_h_per_CPM = delta_uSv_h / delta_CPM
+S_empirical_impulses_per_uR =
+    0.5262 * delta_CPM / delta_uSv_h
+```
+
+The `0.5262` factor uses 1 µR ≈ 0.00877 µSv for gamma in air. Keep the direct
+µSv/h-per-CPM ratio as the primary comparison result because RadiaCode reports
+dose-equivalent rate rather than exposure. On 2026-10-05 the user accepted the
+factory datasheet value `S = 137.5 impulses/µR` after the geometries failed to
+converge.

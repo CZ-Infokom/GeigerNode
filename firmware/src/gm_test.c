@@ -35,7 +35,8 @@ _Static_assert(((380000ULL * 1023ULL) + ((401ULL * 1095ULL) / 2ULL)) /
 _Static_assert(885U + GM_HV_SETTLE_COUNTS < HV_ADC_HARD_ABORT,
 	       "settle band stays under the 400 V abort");
 _Static_assert(GM_TUBE_SI29BG_HV_V == HV_TARGET_V, "tube profile matches the HV target");
-_Static_assert(GM_TUBE_SI29BG_SENSITIVITY_UNUSED == 0U, "sensitivity is not a scale factor");
+_Static_assert(RADIATION_SI29BG_SENSITIVITY_X10 == 1375U,
+	       "accepted SI-29BG sensitivity is 137.5 impulses/uR");
 _Static_assert(GM_MEASURE_MS == 600000UL, "background window is 10 minutes");
 _Static_assert(GM_MEASURE_BUCKETS == 600UL, "one bucket per second");
 

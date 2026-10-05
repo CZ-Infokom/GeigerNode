@@ -3,18 +3,19 @@
 
 #include <stdint.h>
 
+#include "radiation.h"
+
 /*
  * Tube profile for a later swap to the SBM-20.
- * sensitivity_imp_per_ur is provisional. Zero means "do not use".
+ * Sensitivity is stored x10 so 137.5 impulses/uR is exact.
  * Pulse counting must not read it and must not scale counts by it.
  */
 struct gm_tube_profile {
 	uint16_t nominal_hv_v;
-	uint16_t sensitivity_imp_per_ur;
+	uint16_t sensitivity_imp_per_ur_x10;
 };
 
-#define GM_TUBE_SI29BG_HV_V                 380U
-#define GM_TUBE_SI29BG_SENSITIVITY_UNUSED   0U
+#define GM_TUBE_SI29BG_HV_V 380U
 
 extern const struct gm_tube_profile gm_tube_si29bg;
 

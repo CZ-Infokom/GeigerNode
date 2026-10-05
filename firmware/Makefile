@@ -66,7 +66,7 @@ $(BIN):
 $(ELF): $(OBJ) | $(BIN)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ)
 
-$(BIN)/%.o: src/%.c include/board.h include/gpio.h include/gm_counter.h include/gm_test.h include/adc.h include/twi_slave.h include/radsens.h include/hv.h | $(BIN)
+$(BIN)/%.o: src/%.c include/board.h include/gpio.h include/gm_counter.h include/gm_test.h include/adc.h include/twi_slave.h include/radsens.h include/radiation.h include/hv.h | $(BIN)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(HEX): $(ELF)
