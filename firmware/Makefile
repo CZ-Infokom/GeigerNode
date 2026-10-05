@@ -46,14 +46,17 @@ AVRDUDE_FLAGS := -p $(AVRDUDE_MCU) -c $(PROGRAMMER) -P $(PORT)
 
 BIN := bin
 
-SRC := src/main.c src/gpio.c src/gm_counter.c src/adc.c src/twi_slave.c src/radsens.c src/hv.c
+# This image does not link TWI or the radiation registers. Those sources
+# stay in the tree for the later host test. Linking them would install the
+# TWI vector during the HV run.
+SRC := src/main.c src/gpio.c src/gm_counter.c src/gm_test.c src/adc.c src/hv.c
 OBJ := $(patsubst src/%.c,$(BIN)/%.o,$(SRC))
 
 ELF := $(BIN)/$(TARGET).elf
 HEX := $(BIN)/$(TARGET).hex
 LST := $(BIN)/$(TARGET).lst
 
-.PHONY: all clean size flash verify read-signature read-fuses toolchain-info disasm fuses read-hv-test read-freq-series arm-freq-series
+.PHONY: all clean size flash verify read-signature read-fuses toolchain-info disasm fuses read-hv-test read-freq-series arm-freq-series read-gm-test arm-gm-test
 
 all: $(HEX) size
 
@@ -63,7 +66,7 @@ $(BIN):
 $(ELF): $(OBJ) | $(BIN)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ)
 
-$(BIN)/%.o: src/%.c include/board.h include/gpio.h include/gm_counter.h include/adc.h include/twi_slave.h include/radsens.h include/hv.h | $(BIN)
+$(BIN)/%.o: src/%.c include/board.h include/gpio.h include/gm_counter.h include/gm_test.h include/adc.h include/twi_slave.h include/radsens.h include/hv.h | $(BIN)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(HEX): $(ELF)
@@ -140,6 +143,27 @@ arm-freq-series:
 		exit 0; \
 	fi
 	$(AVRDUDE) $(AVRDUDE_FLAGS) -t < $(BIN)/arm-cmds.txt
+
+# Read the SI-29BG one-shot record. EEPROM read only. Does not arm, does not
+# start HV, and does not write fuses. A read resets the MCU. If the test was
+# RUNNING, that reset latches ABORTED.
+read-gm-test:
+	mkdir -p $(BIN)
+	$(AVRDUDE) $(AVRDUDE_FLAGS) -U eeprom:r:$(BIN)/gm-test.bin:r
+	python3 bringup/read_gm_test.py $(BIN)/gm-test.bin
+
+# Explicit re-arm. Writes the GM record's state and checksum, or one new
+# ARMED record at EEPROM address 256 when that record is missing. Does not
+# write fuses or flash. The programmer reset that follows starts the 5 s delay.
+arm-gm-test:
+	mkdir -p $(BIN)
+	$(AVRDUDE) $(AVRDUDE_FLAGS) -U eeprom:r:$(BIN)/gm-test.bin:r
+	python3 bringup/arm_gm_test.py $(BIN)/gm-test.bin $(BIN)/arm-gm-cmds.txt
+	@if [ ! -s $(BIN)/arm-gm-cmds.txt ]; then \
+		echo "EEPROM was already ARMED. No EEPROM bytes were written."; \
+		exit 0; \
+	fi
+	$(AVRDUDE) $(AVRDUDE_FLAGS) -t < $(BIN)/arm-gm-cmds.txt
 
 clean:
 	rm -rf $(BIN)

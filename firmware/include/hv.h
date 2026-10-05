@@ -4,14 +4,13 @@
 #include <stdint.h>
 
 /*
- * Production hold. Nominal target is 380 V at 2500 Hz, the exact
- * rate inside the frozen 2400-2500 Hz band. Pulse cap is 100 us.
- * The hard abort is 932 counts, around 400 V.
- * Q1-diode peak at 380 V measured 427.4 V with the probe attached.
- * A fault latches PB1 low. There is no automatic restart.
+ * SI-29BG bring-up. The regulator target is 380 V at 2400 Hz.
+ * Pulse cap is 100 us. The hard abort is 932 counts, around 400 V.
+ * No controller state may start a higher target, a higher rate, or a
+ * wider pulse. A fault latches PB1 low. There is no automatic restart.
  *
  * The one-shot characterization tables remain in this file.
- * This image does not run them.
+ * This image does not run them. The 2500 Hz production hold is closed.
  *
  * The tables below are the last characterization sweep. It ran with a
  * 995-count ceiling. This image does not run that sweep, and its abort
@@ -54,6 +53,10 @@
 
 #define HV_BENCH_VOLTS          380U
 #define HV_BENCH_HZ             2500U
+
+/* SI-29BG operating point. These are hard limits for this image. */
+#define HV_TARGET_V             380U
+#define HV_SWITCH_FREQ_HZ       2400U
 
 #define HV_HYST_COUNTS          5U
 #define HV_FAST_LOW_COUNTS      20U
@@ -143,6 +146,15 @@ void hv_bench_boot(void);
 uint8_t hv_bench_start(uint16_t now_ms);
 void hv_bench_poll(uint16_t now_ms);
 uint8_t hv_bench_indicator(void);
+
+/* SI-29BG test. Begins only at HV_TARGET_V and HV_SWITCH_FREQ_HZ. */
+uint8_t hv_gm_begin(uint16_t now_ms);
+void hv_gm_poll(uint16_t now_ms);
+void hv_gm_stop(void);
+uint8_t hv_switch_is_off(void);
+uint16_t hv_latched_pulse_us(void);
+uint16_t hv_latched_status(void);
+uint32_t hv_cap_milliseconds(void);
 
 extern volatile uint16_t adc_raw;
 extern volatile uint16_t adc_avg;

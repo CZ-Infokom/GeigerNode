@@ -24,6 +24,9 @@
 #if HV_BENCH_VOLTS != 380 || HV_BENCH_HZ != 2500
 #error "Production hold is 380 V at 2500 Hz"
 #endif
+#if HV_TARGET_V != 380 || HV_SWITCH_FREQ_HZ != 2400
+#error "SI-29BG bring-up is 380 V at 2400 Hz"
+#endif
 #if HV_FREQ_TEST_COUNT != 6
 #error "HV series is six tests"
 #endif
@@ -363,7 +366,12 @@ static void hv_step(void)
 		hv_finish(HV_FAULT, HV_TEST_OVERVOLTAGE);
 		return;
 	}
-	if (active_frequency_hz > HV_FREQ_SERIES_MAX_HZ) {
+	/*
+	 * This image may regulate only the SI-29BG point. A wrong TOP or
+	 * a wrong commanded rate latches off. It does not retune either one.
+	 */
+	if (active_frequency_hz != HV_SWITCH_FREQ_HZ ||
+	    ICR1 != hv_top_for(HV_SWITCH_FREQ_HZ)) {
 		hv_finish(HV_FAULT, HV_TEST_FAULT);
 		return;
 	}
@@ -379,7 +387,8 @@ static void hv_step(void)
 		return;
 	}
 	hv_track();
-	if (pulse_width_us > HV_MAX_PULSE_US) {
+	if (pulse_width_us > HV_MAX_PULSE_US ||
+	    OCR1A > (uint16_t)(HV_MAX_PULSE_US * HV_COUNTS_PER_US)) {
 		hv_finish(HV_FAULT, HV_TEST_FAULT);
 	}
 }
@@ -389,8 +398,13 @@ static uint8_t hv_test_begin(uint16_t now_ms, uint16_t volts, uint16_t frequency
 	uint16_t ticks;
 	uint16_t top;
 
-	if (regulator_state != HV_OFF || frequency_hz == 0 ||
-	    frequency_hz > HV_FREQ_SERIES_MAX_HZ) {
+	/*
+	 * Refuse every other operating point before the timer starts.
+	 * The characterization series calls this with higher rates; this
+	 * image does not invoke that series, and those calls cannot start HV.
+	 */
+	if (regulator_state != HV_OFF || volts != HV_TARGET_V ||
+	    frequency_hz != HV_SWITCH_FREQ_HZ) {
 		hv_disconnect();
 		return 0;
 	}
@@ -501,6 +515,65 @@ uint8_t hv_bench_indicator(void)
 		return HV_LED_ON;
 	}
 	return HV_LED_OFF;
+}
+
+uint8_t hv_switch_is_off(void)
+{
+	uint8_t com = (uint8_t)(TCCR1A & (_BV(COM1A1) | _BV(COM1A0)));
+	uint8_t clock = (uint8_t)(TCCR1B & (_BV(CS12) | _BV(CS11) | _BV(CS10)));
+
+	return pulse_width_us == 0 && com == 0 && clock == 0 &&
+	       (HV_SW_DDR & _BV(HV_SW_DDR_BIT)) != 0 &&
+	       (HV_SW_PORT & _BV(HV_SW_PORT_BIT)) == 0;
+}
+
+uint16_t hv_latched_pulse_us(void)
+{
+	return latched_final_pulse_us;
+}
+
+uint16_t hv_latched_status(void)
+{
+	return latched_status;
+}
+
+uint32_t hv_cap_milliseconds(void)
+{
+	return (uint32_t)updates_at_cap * (uint32_t)HV_CTRL_PERIOD_MS;
+}
+
+uint8_t hv_gm_begin(uint16_t now_ms)
+{
+	return hv_test_begin(now_ms, HV_TARGET_V, HV_SWITCH_FREQ_HZ);
+}
+
+void hv_gm_poll(uint16_t now_ms)
+{
+	if (regulator_state != HV_STARTING && regulator_state != HV_REGULATING) {
+		return;
+	}
+	if (regulator_state == HV_STARTING &&
+	    (uint16_t)(now_ms - started_ms) >= HV_TEST_MAX_RUNTIME_MS) {
+		hv_finish(HV_FAULT, HV_TEST_TIMEOUT);
+		return;
+	}
+	if ((uint16_t)(now_ms - last_ctrl_ms) < HV_CTRL_PERIOD_MS) {
+		return;
+	}
+	last_ctrl_ms = now_ms;
+	hv_step();
+}
+
+void hv_gm_stop(void)
+{
+	if (regulator_state == HV_STARTING || regulator_state == HV_REGULATING) {
+		latched_final_pulse_us = pulse_width_us;
+	}
+	hv_disconnect();
+	if (regulator_state != HV_FAULT) {
+		regulator_state = HV_OFF;
+	}
+	active_frequency_hz = 0;
 }
 
 static void hv_store_series(void)

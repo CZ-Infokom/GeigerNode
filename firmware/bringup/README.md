@@ -1,8 +1,8 @@
 # GeigerNode bring-up
 
-Work in this order. Stop when this note says to stop. High voltage stays off. Fuses are read and saved, then left unchanged.
+Current step: the SI-29BG 10-minute background run. The 60 s path test passed. The tube stays installed. Do not rerun the earlier HV ladders. Do not raise the target above 380 V, the rate above 2400 Hz, or the pulse cap above 100 µs.
 
-The firmware in this tree forces PB1 low and blinks PD7. Build it only after the fuse bytes are saved and `F_CPU` matches the clock those fuses select.
+The sections below are the historical bring-up record. Fuses were written once and are not to be changed.
 
 ## Phase 0 — host toolchain
 
@@ -467,3 +467,267 @@ Stop and remove power if the Q1 collector peak reaches about 450 V, if ringing g
 ## Stop
 
 The 1400/1500 Hz series is COMPLETE. 360 V at 1400 Hz held 93 µs. 380 V at 1500 Hz held 99 µs. Q1 collector at that 380 V point measured 411 V. The pulse cap stays 100 µs. The 2000 Hz ladder is COMPLETE. 380 V held 96 µs. 390 V and 400 V both sit at about 389 V and 100 µs. Scope peaks from GND to the Q1-diode net were 395 V, 407 V, 415 V, 427 V, 439 V, and 439 V. The 3.3 V rail stayed stable. Ringing was present, well behaved, and fell off fast. Temperature was OK. The 380 V sweep from 2000 Hz to 2500 Hz is COMPLETE. Holds were 96, 95, 94, 92, 91, and 90 µs. Q1-diode peaks were 423 V, then 427 V. The 2500 Hz ladder from 350 V to 400 V is COMPLETE. 400 V held 97 µs. Q1-diode peaks were 391 V, 403 V, 415 V, 427 V, 435 V, and 447 V. The 3.3 V rail, ringing, and temperature were OK. The 400 V sweep from 2500 Hz to 3000 Hz is COMPLETE. Holds were 85, 84, 95, 94, 93, and 92 µs. All six are HV_TEST_OK. The Q1-diode peak was 447 V on every step. Ringing subsided well in time. The 3.3 V rail stayed stable. Temperature was OK. Characterization is frozen: nominal target 380 V, nominal frequency about 2400–2500 Hz, pulse cap 100 µs, production abort around 400 V. The Q1-diode peak at 380 V was about 427 V with the probe attached. The 995-count abort was characterization only. Do not change fuses.
+
+## SI-29BG 60 s pulse-path test
+
+The tube is an SI-29BG. The SBM-20 is not on the board. This image proves the signal path and the regulator with the tube connected. It does not convert CPM to dose, and it does not reject closely spaced edges.
+
+Operating point, fixed in the firmware:
+
+| Limit | Value |
+| --- | --- |
+| Target | 380 V, 885 counts |
+| Frequency | 2400 Hz |
+| Pulse cap | 100 µs |
+| Hard abort | 932 counts, about 400 V |
+| Pre-HV delay | 5 s, HV off |
+| Settle | within about ±5 V (12 counts) for 1 continuous second, or abort at 20 s |
+| Count window | 600 s |
+| EEPROM | one record at address 256, written only after PB1 is forced low |
+
+`make flash` chip-erases EEPROM because EESAVE is unprogrammed. That erase removes the old frequency-series image. The series is already recorded above and on board 01. A blank GM record does not start HV. Do not run `make fuses`, `make arm-freq-series`, or `make read-freq-series` for this test.
+
+Before applying power for the run:
+
+1. Confirm the SI-29BG is mechanically secure.
+2. Confirm tube polarity.
+3. Confirm the HV ballast chain is in series with the tube.
+4. Do not touch the tube or the HV section while it is energized.
+5. Keep the DMM off the HV output. A meter there loads the converter and latches the regulator off.
+6. If a scope is used, connect it only to PD2 / GM_PULSE and GND. Idle is high, near 3.3 V. An event is a low-going pulse. Do not probe the tube electrodes with an ordinary probe.
+7. Current-limit the board supply.
+
+From `firmware/`:
+
+```sh
+make
+make flash
+make verify
+```
+
+`make flash` programs flash only. HV stays off and the LED stays off, because the test is not armed.
+
+When the bench is ready and everyone is clear of the HV section:
+
+```sh
+make arm-gm-test
+```
+
+That writes the arm word and checksum, or one new ARMED record if EEPROM has no valid GM record. It does not write fuses or flash. The programmer reset starts the run. Watch PD7:
+
+| PD7 | Meaning |
+| --- | --- |
+| Off | Not armed. HV is off. |
+| Slow blink, 500 ms | 5 s pre-HV delay. PB1 is low. |
+| Fast blink, 100 ms | Regulator is starting or settling. |
+| On, with brief dips | 10-minute measurement. A dip is one or more falling edges. The dip is generated in the main loop, not in the INT0 ISR. |
+| On, steady | Window finished and HV is off. Read the record. |
+| Four blinks and a pause | Fault or abort. HV is off. Read the record. |
+
+The fast blink should give way to the measurement within a few seconds. The firmware allows 20 s to settle and then 10 minutes of counting. Wait until the LED has been steady, about 11 minutes after arming, or until the fault pattern is obvious. Do not reset the board and do not start an ISP read during the blinks. An ISP read resets the MCU. If the record is RUNNING, that reset forces PB1 low, stores ABORTED, and will not restart. Flash this image before arming. A version 1, 2, or 3 record does not start this firmware, and the previous image will not run a version 4 record.
+
+Then:
+
+```sh
+make read-gm-test
+```
+
+That reads EEPROM only. It does not arm, does not start HV, and does not modify fuses. PB1 must be low afterward.
+
+Interval bins are exclusive and timed at 1 µs. Each gap increments one bin: <50 µs, 50–100 µs, 100–200 µs, 200–500 µs, 500 µs–1 ms, 1–2 ms, 2–5 ms, 5–10 ms, and >=10 ms. A 0 µs gap is two edges in the same microsecond and lands in <50 µs. Those edges are counted. The bins saturate at 65535. Switching at 2400 Hz is 417 µs, so that spacing lands in 200–500 µs. A repeatable 100–300 µs cluster points at the tube or the pulse path. `GM_TEST_EXCESSIVE_FAST_PULSES` does not stop the window. It is stored when a finished window has at least 25 gaps under 1 ms, or when at least 30 pulses have more than half of their gaps under 2 ms. A few close edges stay `GM_TEST_OK` and are still visible in the bins.
+
+A successful first run shows HV near 380 V, pulse width near the earlier 91 µs / 93 µs region, little or no time at 100 µs, some falling edges, no runaway, no HV fault, and PB1 low at the end. A background CPM below expectation is not a reason to change the setpoint.
+
+If the measurement pulse count is zero, do not raise HV. Keep 380 V and check, in order:
+
+1. Tube polarity.
+2. Reservoir near 380 V from the EEPROM HV fields.
+3. Tube-side HV through the ballast, with an HV-rated method, not an ordinary probe on the tube.
+4. GM_PULSE / PD2 on the scope.
+5. The Q2 detector path.
+6. INT0 is falling-edge in this image.
+7. To confirm the firmware itself counts, arm a run and briefly pull PD2 to ground during the measurement window. That falling edge must increase Measurement pulses. An edge during the 5 s delay increases Total GM pulses only. Do not reach into the HV section to do this.
+8. Tube behavior only after the signal path is shown to count.
+
+If the rate is unexpectedly high, do not treat it as radiation and do not add a software dead time. Look at the GM_PULSE waveform, at more than one falling edge per discharge, at HV-switching noise, at the sub-millisecond bins, and at grounding. The Q1 collector peak at this setpoint was about 427 V with a probe on the earlier unloaded run. Stop and remove power if that peak reaches about 450 V, if Q1, D1, or L1 heat is abnormal, or if the 3.3 V rail moves.
+
+`make arm-gm-test` is the only way to run the test again. A completed or aborted record does not start HV on reset.
+
+This image is the 1 µs inter-arrival run. It does not choose an SI-29BG sensitivity, convert CPM to dose, filter the rate, publish RadSens registers, or exercise I2C address 0x66.
+
+## SI-29BG 60 s result
+
+Passed on 2026-10-02. `make read-gm-test` reported GM_TEST_OK and EEPROM COMPLETE.
+
+| Field | Value |
+| --- | --- |
+| Measurement pulses | 7 |
+| CPM | 7 |
+| Min / max CPS | 0 / 2 |
+| Minimum interval | 0 ms, one pair, counted |
+| Cumulative bins <1 / <2 / <5 / <10 ms | 1 / 1 / 1 / 1 |
+| HV | 379 V, ADC 883–885 |
+| Pulse width | 80 µs for the whole window |
+| Time at 100 µs | 0 ms |
+
+The unloaded 2400 Hz / 380 V hold had finished near 91 µs. This window held 80 µs and the ADC stayed on the 885-count target. The tube did not push the regulator toward the cap. The one same-tick pair is recorded and was not rejected. Do not add dead time for it, and do not raise the setpoint.
+
+## SI-29BG 10-minute background run
+
+Same setpoint and the same one-shot arm. The window is 600 s. CPM in the reader is `measurement pulses / 10`, shown to one decimal. Integer `measured_cpm` in EEPROM is that rate truncated. The raw pulse count is the value to keep. That run used the 1 ms tick, so a pair inside one tick is stored as 0 ms.
+
+Flash, then arm only when the bench is clear:
+
+```sh
+make flash
+make verify
+make arm-gm-test
+```
+
+Leave the board alone until the LED has been steady. Then `make read-gm-test`. Do not read while the LED is blinking or while it is in the long on period.
+
+## SI-29BG 10-minute result
+
+Passed on 2026-10-02. `make read-gm-test` reported GM_TEST_OK and EEPROM COMPLETE.
+
+| Field | Value |
+| --- | --- |
+| Measurement pulses | 112 |
+| CPM | 11.2 |
+| Min / max CPS | 0 / 6 |
+| Minimum interval | 0 ms |
+| Cumulative bins <1 / <2 / <5 / <10 ms | 6 / 8 / 8 / 8 |
+| HV | 378–380 V, ADC 881–886, final count 885 |
+| Pulse width | 80 µs for the whole window |
+| Time at 100 µs | 0 ms |
+
+The pulse width did not move, and it stayed under the cap. Six gaps were inside one millisecond tick and two more were 1 ms. The other 103 gaps were 10 ms or longer. Those eight close gaps were counted. They are not a reason to add dead time or to raise the setpoint. A one-second bucket of 6 counts is a cluster beside the 11.2 CPM average.
+
+## SI-29BG 1 µs inter-arrival run
+
+Same 380 V, 2400 Hz, and 100 µs cap. Pulse rejection stays off and dose conversion stays off. Timer0 stamps each falling edge at 1 µs. Timer1 remains the HV switcher. The histogram replaces the cumulative 1 ms bins. Version 3 of the EEPROM record is 72 bytes.
+
+If a scope is available, clip it to GM_PULSE / PD2 and GND only, with persistence or single-shot trigger, during the measurement. The question is whether one tube event is one clean low-going pulse or sometimes two. Do not probe the tube.
+
+Flash, then arm only when the bench is clear:
+
+```sh
+make flash
+make verify
+make arm-gm-test
+```
+
+Leave the board alone until the LED has been steady, about 11 minutes after arming. Then `make read-gm-test`. Do not read while the LED is blinking or while it is in the long on period.
+
+## SI-29BG 1 µs result
+
+Passed on 2026-10-02. `make read-gm-test` reported GM_TEST_OK and EEPROM COMPLETE.
+
+| Field | Value |
+| --- | --- |
+| Measurement pulses | 85 |
+| CPM | 8.5 |
+| Min / max CPS | 0 / 2 |
+| Minimum interval | 151 µs |
+| <50 / 50–100 / 100–200 µs | 0 / 0 / 6 |
+| 200–500 / 500 µs–1 ms | 0 / 0 |
+| 1–2 / 2–5 / 5–10 / >=10 ms | 0 / 0 / 0 / 78 |
+| HV | 377–381 V, ADC 879–888, final count 887 |
+| Pulse width | 79–80 µs |
+| Time at 100 µs | 0 ms |
+
+The 84 intervals sum to one less than the 85 pulses. Every close gap is at least 151 µs and under 200 µs. Switching at 2400 Hz is 417 µs, and half of that is 208 µs. Both would land in 200–500 µs, which is empty. The repeatable 151–199 µs delay is the tube or the pulse path. Those six edges were counted. They are not a reason to add dead time or to raise the setpoint. 8.5 CPM against the earlier 11.2 CPM is the same background. The regulator took one step, from 80 µs to 79 µs, and never reached the cap.
+
+## SI-29BG close-interval log
+
+Same 380 V, 2400 Hz, and 100 µs cap. Every falling edge is still counted. Blanking stays 0 µs. Version 4 keeps the histogram and also stores the first 16 gaps below 500 µs, in arrival order. A published SI-29BG dead time is about 95 µs at 400 V, so a second edge near 151–200 µs can be a tube afterpulse. It can also be the Q2 detector crossing the logic threshold twice.
+
+Clip the scope to GM_PULSE / PD2 and GND only before applying power at the bench. Trigger on the falling edge and capture about 500 µs to 1 ms after the event, with persistence or single-shot. Do not probe the tube.
+
+An external reset leaves an ARMED record unstarted and holds PB1 low. The LED slow-blinks and high voltage stays off, including after `make arm-gm-test`. Remove board power, move the board, connect the scope, then apply power. That power-on is what starts the 5 s delay. Do not flash again after arming. A flash erases the arm. Do not remove power after the fast blink until the LED has been steady.
+
+A normal event is one low pulse and then a clean high. A suspected pair is a second clean low pulse about 150–200 µs later. A ringing rising edge that crosses the threshold twice is the Q2 path.
+
+Flash, then arm only when the bench is clear and the scope is on PD2:
+
+```sh
+make flash
+make verify
+make arm-gm-test
+```
+
+Leave the board alone until the LED has been steady. Then `make read-gm-test`. The reader lists each stored gap in microseconds.
+
+## SI-29BG close-interval result
+
+Passed on 2026-10-02. `make read-gm-test` reported GM_TEST_OK and EEPROM COMPLETE.
+
+| Field | Value |
+| --- | --- |
+| Measurement pulses | 112 |
+| CPM | 11.2 |
+| Min / max CPS | 0 / 3 |
+| Minimum interval | 151 µs |
+| 100–200 µs / 200–500 µs | 10 / 0 |
+| Gaps at or above 10 ms | 101 |
+| Stored gaps, in order | 177, 151, 182, 160, 185, 161, 172, 183, 173, 164 µs |
+| Sorted range | 151–185 µs |
+| HV | 377–381 V, ADC 879–888, final count 886 |
+| Pulse width | 79–80 µs |
+| Time at 100 µs | 0 ms |
+
+All ten short gaps were stored, and none of the other 101 gaps was under 10 ms. The same 151 µs floor appeared on the previous run. The values sit in a 34 µs band around about 171 µs. They do not fill the 100–200 µs bin, and the 417 µs switching bin is empty again. Blanking stayed 0. Removing those ten edges would turn 11.2 CPM into 10.2 CPM, so they stay in the raw count. The high-voltage regulator matches the previous window. This read does not include a PD2 waveform.
+
+## SI-29BG source run
+
+Passed on 2026-10-05 with a source nearby. `make read-gm-test` reported GM_TEST_EXCESSIVE_FAST_PULSES and EEPROM COMPLETE. The window finished. The flag is the background rule of 25 gaps under 1 ms. This run has 571 such gaps because the source produces the same companion edges seen at background.
+
+| Field | Value |
+| --- | --- |
+| Measurement pulses | 7317, plus 1 before the window |
+| CPM | 731.7 |
+| Min / max CPS | 1 / 25 |
+| Minimum interval | 145 µs |
+| 100–200 µs / 200–500 µs | 510 / 27 |
+| Stored gaps, first 16 | 154, 170, 381, 167, 157, 160, 153, 155, 164, 159, 160, 163, 154, 166, 234, 159 µs |
+| HV | 376–383 V, ADC 878–893, final count 888 |
+| Pulse width | 79–81 µs |
+| Time at 100 µs | 0 ms |
+
+Fourteen of the sixteen stored gaps are 153–170 µs. That is the same recovery delay as the background log. About 7% of the edges are that companion. The 27 gaps in 200–500 µs match ordinary spacing at 12 counts/s, so the 417 µs switching period is still absent as a peak. Blanking stayed 0. The reservoir moved one step wider than the background window and stayed off the 100 µs cap. This read does not include a PD2 waveform.
+
+## SI-29BG scope-session window
+
+Finished on 2026-10-05. This is the 10-minute record that was running during the PD2 persistence captures, with the source brought in and then held against the tube. `make read-gm-test` reported GM_TEST_EXCESSIVE_FAST_PULSES and EEPROM COMPLETE. The window finished.
+
+| Field | Value |
+| --- | --- |
+| Measurement pulses | 6397 |
+| CPM | 639.7 |
+| Min / max CPS | 0 / 43 |
+| Minimum interval | 146 µs |
+| 100–200 µs / 200–500 µs | 296 / 50 |
+| Stored gaps, first 16 | 155, 167, 162, 159, 168, 151, 157, 152, 147, 167, 146, 161, 164, 154, 151, 154 µs |
+| HV | 374–383 V, ADC 873–894, final count 885 |
+| Pulse width | 79–83 µs |
+| Time at 100 µs | 0 ms |
+
+All sixteen stored gaps are 146–168 µs. Nothing landed under 100 µs. A steady 10.7 counts/s would produce about 14 gaps under 200 µs across 6396 intervals; 296 were stored in that bin, the same recovery companion. Min CPS 0 is the portion with the source away, so this CPM is not a background number. HV minimum 374 V is ADC 873, the bottom of the ±5 V band, and the pulse stayed off the 100 µs cap. Blanking stayed 0.
+
+## SI-29BG background after the scope session
+
+Passed on 2026-10-05 with the source away. `make read-gm-test` reported GM_TEST_OK and EEPROM COMPLETE. The window finished. One edge arrived before the window opened.
+
+| Field | Value |
+| --- | --- |
+| Measurement pulses | 75, plus 1 before the window |
+| CPM | 7.5 |
+| Min / max CPS | 0 / 2 |
+| Minimum interval | 156 µs |
+| 100–200 µs / 200–500 µs | 1 / 0 |
+| Stored gaps | 156 µs |
+| HV | 378–380 V, ADC 882–887, final count 885 |
+| Pulse width | 80 µs |
+| Time at 100 µs | 0 ms |
+
+The only short gap is 156 µs, the same recovery delay as the earlier logs. A steady 7.5 CPM expects about 0.002 gaps under 200 µs, so this one edge is still the companion, and it is the only one in 75 pulses. The 417 µs switching bin is empty. Final ADC 885 is 380 V; the reader prints that count as 379 V. Blanking stayed 0. PD2 persistence on this run shows one long low pulse, a slow rise near 150–200 µs, and one narrow tick on that rise.

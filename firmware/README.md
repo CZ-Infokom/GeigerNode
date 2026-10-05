@@ -1,6 +1,6 @@
 # GeigerNode firmware
 
-Bare-metal bring-up for the ATmega328PB on GeigerNode. Characterization is frozen: nominal target 380 V, nominal frequency about 2400–2500 Hz, pulse cap 100 µs, production abort around 400 V. This source holds 380 V at 2500 Hz after a 5 s delay. That hold has been run: the Q1-diode peak was 427.4 V and thermals were OK. A meter on the HV output loads the converter and latches the hold off. `make read-freq-series` prints the record. `make arm-freq-series` is the only re-arm. It cannot write fuses.
+Bare-metal bring-up for the ATmega328PB on GeigerNode. Characterization is frozen: nominal target 380 V, pulse cap 100 µs, production abort around 400 V. This image is the SI-29BG one-shot. It regulates 380 V at 2400 Hz, counts every falling edge on PD2 for 10 minutes, records each gap in one 1 µs histogram bin, and stores the first 16 gaps below 500 µs. It then turns HV off and writes one EEPROM record. Blanking is 0 µs. It does not reject pulses and it does not convert counts to dose. `make arm-gm-test` is the only arm. `make read-gm-test` only reads. Neither target writes fuses.
 
 ## Toolchain
 
@@ -24,7 +24,7 @@ make F_CPU=1000000UL
 make F_CPU=8000000UL
 ```
 
-The Makefile default is `8000000UL`. PD7 on board 01 measured 500 Hz, which confirmed the 8 MHz clock. `main` rejects any other `F_CPU`. A fast PD7 blink is the 5 s armed delay. The LED stays on while a test is switching, blinks slowly during each 10 s off interval, stays on when the series is complete, and shows a grouped blink after an abort. TWI0 is in the image at address `0x66`, and that bus is untested.
+The Makefile default is `8000000UL`. PD7 on board 01 measured 500 Hz, which confirmed the 8 MHz clock. `main` rejects any other `F_CPU`. This image does not link TWI. The LED is off until the GM test is armed, blinks slowly for the 5 s pre-HV delay, blinks quickly while HV settles, stays on during the 10-minute count, and shows a grouped blink after a fault or abort. The bench steps are at the end of `bringup/README.md`.
 
 Build output goes to `bin/`, which git ignores. `make` builds `bin/geigernode.hex` and prints `avr-size`. `make disasm` writes `bin/geigernode.lst`. `make clean` removes `bin/`.
 
