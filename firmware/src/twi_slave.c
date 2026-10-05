@@ -4,16 +4,38 @@
 #include <util/atomic.h>
 #include <util/twi.h>
 
+#include "radiation.h"
 #include "twi_slave.h"
 
-#define TWI_REG_COUNT 16
-
 #define TWI_CR_ACK ((1 << TWINT) | (1 << TWEA) | (1 << TWEN) | (1 << TWIE))
+#define TWI_CR_RECOVER \
+	((1 << TWINT) | (1 << TWSTO) | (1 << TWEA) | (1 << TWEN) | (1 << TWIE))
 
 static volatile uint8_t regs[TWI_REG_COUNT];
 static uint8_t txn[TWI_REG_COUNT];
-static volatile uint8_t reg_ptr;
-static uint8_t next_byte_is_pointer;
+static volatile uint8_t addr_ptr;
+static uint8_t send_ptr;
+static uint8_t expect_pointer;
+static uint8_t have_new_pointer;
+
+static void twi_store_u24(volatile uint8_t *dest, uint32_t value)
+{
+	value &= 0x00FFFFFFUL;
+	dest[0] = (uint8_t)(value >> 16);
+	dest[1] = (uint8_t)(value >> 8);
+	dest[2] = (uint8_t)value;
+}
+
+static void twi_fill_const(volatile uint8_t *dest)
+{
+	dest[TWI_REG_DEVICE_ID] = TWI_REG_DEVICE_ID_VALUE;
+	dest[TWI_REG_FW_VERSION] = TWI_REG_FW_VERSION_VALUE;
+	dest[TWI_REG_ADDRESS] = TWI_SLAVE_ADDRESS;
+	dest[TWI_REG_SENSITIVITY] =
+		(uint8_t)(RADIATION_SI29BG_SENSITIVITY_REG & 0xFFU);
+	dest[TWI_REG_SENSITIVITY + 1U] =
+		(uint8_t)(RADIATION_SI29BG_SENSITIVITY_REG >> 8);
+}
 
 static void twi_latch(void)
 {
@@ -22,13 +44,25 @@ static void twi_latch(void)
 	for (i = 0; i < TWI_REG_COUNT; i++) {
 		txn[i] = regs[i];
 	}
+	/* Constants win even if the live bank was disturbed. */
+	twi_fill_const(txn);
 }
 
-static void twi_load_next(void)
+static void twi_accept_pointer(uint8_t value)
 {
-	TWDR0 = (reg_ptr < TWI_REG_COUNT) ? txn[reg_ptr] : 0;
-	if (reg_ptr < (TWI_REG_COUNT - 1)) {
-		reg_ptr++;
+	if (value >= TWI_REG_COUNT) {
+		value = 0;
+	}
+	addr_ptr = value;
+	expect_pointer = 0;
+	have_new_pointer = 1;
+}
+
+static void twi_send_byte(void)
+{
+	TWDR0 = (send_ptr < TWI_REG_COUNT) ? txn[send_ptr] : 0;
+	if (send_ptr < (TWI_REG_COUNT - 1U)) {
+		send_ptr++;
 	}
 }
 
@@ -37,34 +71,42 @@ ISR(TWI0_vect)
 	switch (TWSR0 & 0xF8) {
 	case TW_SR_SLA_ACK:
 	case TW_SR_ARB_LOST_SLA_ACK:
-		next_byte_is_pointer = 1;
+		expect_pointer = 1;
 		TWCR0 = TWI_CR_ACK;
 		break;
 
 	case TW_SR_DATA_ACK:
-		if (next_byte_is_pointer) {
-			reg_ptr = TWDR0;
-			next_byte_is_pointer = 0;
+	case TW_SR_DATA_NACK:
+		if (expect_pointer) {
+			twi_accept_pointer(TWDR0);
 		}
 		TWCR0 = TWI_CR_ACK;
 		break;
 
 	case TW_SR_STOP:
-		/* Repeated START arrives here too. Keep reg_ptr. */
-		next_byte_is_pointer = 0;
+		/* STOP and repeated START share this code. Do not treat
+		 * leftover TWDR0 as a pointer; that restamps 0x03/0x06
+		 * and every later read returns the 0x00 dose high byte.
+		 */
+		expect_pointer = 0;
 		TWCR0 = TWI_CR_ACK;
 		break;
 
 	case TW_ST_SLA_ACK:
 	case TW_ST_ARB_LOST_SLA_ACK:
-		/* One snapshot for the whole sequential read. */
 		twi_latch();
-		twi_load_next();
+		if (have_new_pointer) {
+			send_ptr = addr_ptr;
+			have_new_pointer = 0;
+		} else {
+			send_ptr = 0;
+		}
+		twi_send_byte();
 		TWCR0 = TWI_CR_ACK;
 		break;
 
 	case TW_ST_DATA_ACK:
-		twi_load_next();
+		twi_send_byte();
 		TWCR0 = TWI_CR_ACK;
 		break;
 
@@ -73,9 +115,12 @@ ISR(TWI0_vect)
 		TWCR0 = TWI_CR_ACK;
 		break;
 
+	case TW_BUS_ERROR:
+		TWCR0 = TWI_CR_RECOVER;
+		break;
+
 	default:
-		TWCR0 = (1 << TWINT) | (1 << TWSTO) | (1 << TWEA) | (1 << TWEN) |
-			(1 << TWIE);
+		TWCR0 = TWI_CR_ACK;
 		break;
 	}
 }
@@ -87,10 +132,13 @@ void twi_slave_init(void)
 	for (i = 0; i < TWI_REG_COUNT; i++) {
 		regs[i] = 0;
 	}
-	regs[TWI_REG_DEVICE_ID] = TWI_REG_DEVICE_ID_VALUE;
+	twi_fill_const(regs);
+	regs[TWI_REG_LED] = 0;
 
-	reg_ptr = 0;
-	next_byte_is_pointer = 0;
+	addr_ptr = 0;
+	send_ptr = 0;
+	expect_pointer = 0;
+	have_new_pointer = 0;
 
 	/* Slave does not generate the clock. External 4.7 kOhm pull-ups hold the bus. */
 	TWSR0 = 0;
@@ -100,15 +148,18 @@ void twi_slave_init(void)
 	TWCR0 = TWI_CR_ACK;
 }
 
-void twi_slave_set_static_radiation(uint32_t value_x10)
+void twi_slave_publish(uint32_t dynamic_x10,
+		       uint32_t static_x10,
+		       uint16_t pulses,
+		       uint8_t hv_on)
 {
-	uint8_t hi = (uint8_t)((value_x10 >> 16) & 0xFF);
-	uint8_t mid = (uint8_t)((value_x10 >> 8) & 0xFF);
-	uint8_t lo = (uint8_t)(value_x10 & 0xFF);
-
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-		regs[TWI_REG_STATIC_RAD] = hi;
-		regs[TWI_REG_STATIC_RAD + 1] = mid;
-		regs[TWI_REG_STATIC_RAD + 2] = lo;
+		twi_fill_const(regs);
+		twi_store_u24(&regs[TWI_REG_DYNAMIC_RAD], dynamic_x10);
+		twi_store_u24(&regs[TWI_REG_STATIC_RAD], static_x10);
+		regs[TWI_REG_PULSE_COUNT] = (uint8_t)(pulses >> 8);
+		regs[TWI_REG_PULSE_COUNT + 1U] = (uint8_t)pulses;
+		regs[TWI_REG_HV_ENABLE] = hv_on ? 1U : 0U;
+		regs[TWI_REG_LED] = hv_on ? 1U : 0U;
 	}
 }

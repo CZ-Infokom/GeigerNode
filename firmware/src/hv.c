@@ -576,6 +576,21 @@ void hv_gm_stop(void)
 	active_frequency_hz = 0;
 }
 
+uint8_t hv_is_starting(void)
+{
+	return regulator_state == HV_STARTING;
+}
+
+uint8_t hv_is_regulating(void)
+{
+	return regulator_state == HV_REGULATING;
+}
+
+uint8_t hv_is_fault(void)
+{
+	return regulator_state == HV_FAULT;
+}
+
 static void hv_store_series(void)
 {
 	series.checksum = hv_freq_checksum(&series);

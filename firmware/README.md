@@ -1,6 +1,6 @@
 # GeigerNode firmware
 
-Bare-metal bring-up for the ATmega328PB on GeigerNode. Characterization is frozen: nominal target 380 V, pulse cap 100 µs, production abort around 400 V. This image is the SI-29BG one-shot. It regulates 380 V at 2400 Hz, counts every falling edge on PD2 for 10 minutes, records each gap in one 1 µs histogram bin, and stores the first 16 gaps below 500 µs. It then turns HV off and writes one EEPROM record. Blanking is 0 µs. It does not reject pulses and it does not convert counts to dose. `make arm-gm-test` is the only arm. `make read-gm-test` only reads. Neither target writes fuses.
+Bare-metal bring-up for the ATmega328PB on GeigerNode. Characterization is frozen: nominal target 380 V, pulse cap 100 µs, production abort around 400 V. This image is the SI-29BG RadSens slave. Every reset waits 5 s, regulates 380 V at 2400 Hz, counts every falling edge on PD2, and publishes ClimateGuard-compatible registers on TWI0 address `0x66`. There is no arm word. Dose uses the accepted factory Cs-137 coefficient `S = 137.5 impulses/µR`. Dynamic radiation is the last 10 s. Static radiation is the last 60 s. During the count the LED is off and flashes on for each pulse. `make flash` programs flash only. `make read-gm-test` still reads EEPROM but this image does not write a GM record.
 
 ## Toolchain
 
@@ -24,7 +24,7 @@ make F_CPU=1000000UL
 make F_CPU=8000000UL
 ```
 
-The Makefile default is `8000000UL`. PD7 on board 01 measured 500 Hz, which confirmed the 8 MHz clock. `main` rejects any other `F_CPU`. This image does not link TWI. The LED is off until the GM test is armed, blinks slowly for the 5 s pre-HV delay, blinks quickly while HV settles, stays on during the 10-minute count, and shows a grouped blink after a fault or abort. The bench steps are at the end of `bringup/README.md`.
+The Makefile default is `8000000UL`. PD7 on board 01 measured 500 Hz, which confirmed the 8 MHz clock. `main` rejects any other `F_CPU`.
 
 Build output goes to `bin/`, which git ignores. `make` builds `bin/geigernode.hex` and prints `avr-size`. `make disasm` writes `bin/geigernode.lst`. `make clean` removes `bin/`.
 
@@ -39,7 +39,7 @@ make flash
 make verify
 ```
 
-`make flash` and `make verify` program flash only. `make read-fuses` only reads LFUSE, HFUSE, and EFUSE.
+`make flash` and `make verify` program flash only. `make read-fuses` only reads LFUSE, HFUSE, and EFUSE. After `make flash` the programmer reset starts the 5 s delay, then high voltage. Stay clear of the HV section.
 
 ```sh
 make fuses

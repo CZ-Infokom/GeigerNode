@@ -3,15 +3,15 @@
 #include "radsens.h"
 #include "twi_slave.h"
 
-static uint32_t static_radiation_x10;
-
-void radsens_set_static_urh_x10(uint32_t value)
-{
-	static_radiation_x10 = value & 0x00FFFFFFUL;
-	twi_slave_set_static_radiation(static_radiation_x10);
-}
-
 void radsens_init(void)
 {
-	radsens_set_static_urh_x10(TWI_STATIC_RAD_VALUE);
+	radsens_publish(0, 0, 0, 0);
+}
+
+void radsens_publish(uint32_t dynamic_x10,
+		     uint32_t static_x10,
+		     uint16_t pulses,
+		     uint8_t hv_on)
+{
+	twi_slave_publish(dynamic_x10, static_x10, pulses, hv_on);
 }

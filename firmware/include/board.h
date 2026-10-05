@@ -15,8 +15,10 @@
  * TWI0 slave address is 0x66. SDA is PC4 and SCL is PC5.
  * Timer2 is the millisecond tick. Its pin outputs stay disconnected.
  * Timer1 is the HV pulse. Its hard maximum width is 100 us.
- * The SI-29BG test regulates 380 V at 2400 Hz. Pulse width stays at
- * or below 100 us. A fault latches PB1 low.
+ * Every reset waits 5 s, then regulates 380 V at 2400 Hz and publishes
+ * RadSens registers. There is no arm word. Pulse width stays at or below
+ * 100 us. A fault latches PB1 low. During RUN the LED is off and flashes
+ * on for each GM pulse.
  */
 
 #define HV_SW_PORT     PORTB

@@ -217,6 +217,16 @@ uint32_t gm_counter_window(void)
 	return count;
 }
 
+uint32_t gm_counter_total(void)
+{
+	uint32_t count;
+
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+		count = gm_total_count;
+	}
+	return count;
+}
+
 void gm_counter_snapshot(struct gm_counter_snapshot *out)
 {
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {

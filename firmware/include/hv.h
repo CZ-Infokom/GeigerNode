@@ -148,9 +148,16 @@ void hv_bench_poll(uint16_t now_ms);
 uint8_t hv_bench_indicator(void);
 
 /* SI-29BG test. Begins only at HV_TARGET_V and HV_SWITCH_FREQ_HZ. */
+#define HV_SETTLE_COUNTS      12U
+#define HV_SETTLE_HOLD_MS     1000UL
+#define HV_SETTLE_TIMEOUT_MS  20000UL
+
 uint8_t hv_gm_begin(uint16_t now_ms);
 void hv_gm_poll(uint16_t now_ms);
 void hv_gm_stop(void);
+uint8_t hv_is_starting(void);
+uint8_t hv_is_regulating(void);
+uint8_t hv_is_fault(void);
 uint8_t hv_switch_is_off(void);
 uint16_t hv_latched_pulse_us(void);
 uint16_t hv_latched_status(void);

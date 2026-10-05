@@ -46,10 +46,9 @@ AVRDUDE_FLAGS := -p $(AVRDUDE_MCU) -c $(PROGRAMMER) -P $(PORT)
 
 BIN := bin
 
-# This image does not link TWI or the radiation registers. Those sources
-# stay in the tree for the later host test. Linking them would install the
-# TWI vector during the HV run.
-SRC := src/main.c src/gpio.c src/gm_counter.c src/gm_test.c src/adc.c src/hv.c
+# One-shot GM EEPROM test stays in the tree and is not linked.
+SRC := src/main.c src/gpio.c src/gm_counter.c src/adc.c src/hv.c \
+	src/twi_slave.c src/radsens.c src/radiation.c
 OBJ := $(patsubst src/%.c,$(BIN)/%.o,$(SRC))
 
 ELF := $(BIN)/$(TARGET).elf

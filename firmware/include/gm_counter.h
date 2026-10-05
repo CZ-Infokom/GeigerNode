@@ -58,6 +58,7 @@ uint16_t gm_tube_nominal_hv_v(void);
 void gm_counter_open_window(void);
 void gm_counter_close_window(void);
 uint32_t gm_counter_window(void);
+uint32_t gm_counter_total(void);
 void gm_counter_snapshot(struct gm_counter_snapshot *out);
 
 /* Returns 1 once after the ISR sees a falling edge, then clears the flag. */

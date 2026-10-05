@@ -1,6 +1,6 @@
 # GeigerNode bring-up
 
-Current step: the SI-29BG factory coefficient `S = 137.5 impulses/µR` is accepted. The RadiaCode comparison did not converge across geometry, so that datasheet value stays. The one-shot image does not convert counts to dose. The tube stays installed. Do not rerun the earlier HV ladders. Do not raise the target above 380 V, the rate above 2400 Hz, or the pulse cap above 100 µs.
+Current step: TWI pointer fix is waiting to flash. The first dump returned one live word at every address; the next image returned `0x00` at every address because that leftover word was the dose high byte. After flash, a naked read must return `0x7D`. The factory Cs-137 coefficient `S = 137.5 impulses/µR` is accepted. The tube stays installed. Keep 380 V, 2400 Hz, the 100 µs cap, and zero blanking. Every reset starts the 5 s delay, then high voltage. There is no arm word. Stay clear of the HV section when flashing.
 
 The sections below are the historical bring-up record. Fuses were written once and are not to be changed.
 
@@ -832,3 +832,59 @@ The `0.5262` factor uses 1 µR ≈ 0.00877 µSv for gamma in air. Keep the direc
 dose-equivalent rate rather than exposure. On 2026-10-05 the user accepted the
 factory datasheet value `S = 137.5 impulses/µR` after the geometries failed to
 converge.
+
+## SI-29BG RadSens I2C
+
+The image now links TWI0. Address `0x66`. Device ID `0x00` is `0x7D`. A
+master write of one byte sets the register pointer. The next read, after
+STOP or a repeated START, starts at that pointer. Bytes inside one read
+burst increment. Static radiation is `0x06..0x08`, 24-bit big-endian, unit
+0.1 µR/h, last 60 s. Conversion is `µR/h = CPM * 60 / 137.5`. Dynamic
+radiation at `0x03..0x05` uses the last 10 s. Pulse count at `0x09..0x0A`
+is the measurement window, 16-bit big-endian, and is not cleared by a read
+or by removing a source. Sensitivity at `0x12..0x13` is little-endian 138.
+I2C writes after the pointer byte are ignored, so a master cannot start or
+stop high voltage.
+
+On 2026-10-05 a host read of `0x00` returned `0x00 0x00`, then `0x3B 0xAA`
+with the source present, and every other address returned those same two
+bytes. After the first pointer change every address returned `0x00`. That
+was the high byte of a leftover dose register. A read without a pointer
+byte now starts at `0x00`. After flash:
+
+```sh
+i2cget -y <bus> 0x66 0x00
+i2ctransfer -y <bus> w1@0x66 0x00 r2
+i2ctransfer -y <bus> w1@0x66 0x03 r3
+i2ctransfer -y <bus> w1@0x66 0x06 r3
+i2ctransfer -y <bus> w1@0x66 0x12 r2
+```
+
+Expect `0x7d`, then `0x7d 0x01`, then two different 24-bit rates, then
+`0x8a 0x00`. Read three bytes from `0x03` and `0x06`. Removing the source
+must drop `0x03` within 10 s and `0x06` within 60 s. `0x09` stays.
+
+`make flash` chip-erases EEPROM because EESAVE is unprogrammed. This image
+does not run the one-shot GM record. There is no arm word. Every reset,
+including the programmer reset after flash, starts the 5 s delay and then
+high voltage. Address `0x66` answers during that delay.
+
+From `firmware/`:
+
+```sh
+make
+make flash
+make verify
+```
+
+Stay clear of the HV section. The LED slow-blinks for 5 s, fast-blinks while
+380 V settles, then stays off and flashes on for each count. Four blinks and
+a pause is a fault; high voltage is off. Do not raise the setpoint.
+
+Passed on 2026-10-05. A host master sees address `0x66` and receives values.
+Exact register bytes from that read were not recorded. Background near 9 CPM
+is about 40 raw counts (4.0 µR/h). Do not treat a live reading as a
+calibration.
+
+Keep the DMM off the HV output. Do not probe the tube. Do not change fuses.
+Do not add dead time. Do not raise 380 V or 2400 Hz.
