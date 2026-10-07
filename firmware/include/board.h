@@ -17,10 +17,12 @@
  * change, then the transaction is polled. SCL is never driven.
  * Timer2 is the millisecond tick. Its pin outputs stay disconnected.
  * Timer1 is the HV pulse. Its hard maximum width is 100 us.
- * Every reset waits 5 s, then regulates 380 V at 2400 Hz and publishes
- * RadSens registers. There is no arm word. Pulse width stays at or below
- * 100 us. A fault latches PB1 low. During RUN the LED is off and flashes
- * on for each GM pulse.
+ * Every reset waits 500 ms, then regulates 380 V at 2400 Hz and publishes
+ * RadSens registers. There is no arm word. A host can stop or start that
+ * generator and can store a new address and sensitivity. Pulse width stays
+ * at or below 100 us. A fault latches PB1 low. During the 500 ms wait the
+ * LED is on. During RUN it flashes on for each GM pulse while the LED
+ * register is enabled.
  */
 
 #define HV_SW_PORT     PORTB

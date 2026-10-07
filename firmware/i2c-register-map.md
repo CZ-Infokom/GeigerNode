@@ -1,10 +1,10 @@
 # GeigerNode I2C register map
 
-Slave address `0x66`. This is the ClimateGuard RadSens subset the current firmware publishes. Hardware TWI0 is off. The slave is bit-banged on PC4 (SDA) and PC5 (SCL) and never drives SCL.
+Slave address `0x66` until a host changes it. This is the ClimateGuard RadSens map. Hardware TWI0 is off. The slave is bit-banged on PC4 (SDA) and PC5 (SCL) and never drives SCL. It is timed for the Flipper bridge at 100 kHz.
 
-A master write's first data byte is the register pointer. Every data byte after that is acknowledged and ignored, so an I2C write cannot start or stop high voltage, change the address, or change the sensitivity. A pointer of `0x15` or higher is stored as `0x00`. A read with no pointer byte starts at `0x00`. Bytes inside one read increment. After `0x14`, further bytes in that burst are `0xFF`.
+A master write's first data byte is the register pointer. Up to two data bytes after that are applied. Further bytes in that write are acknowledged and ignored. A pointer of `0x15` or higher is stored as `0x00`. A read with no pointer byte starts at `0x00`. Bytes inside one read increment. After `0x14`, further bytes in that burst are `0xFF`.
 
-Radiation registers stay zero through the 5 s delay and while 380 V is settling. They update once per second after the tube is in run. A reset clears the windows.
+`0x11` reads `1` from reset, including the 500 ms wait and while 380 V is settling. Radiation registers stay zero until the tube is in run, then update once per second. A new run clears the windows. `0x09` counts only while the tube is in run.
 
 ## Map
 
@@ -13,35 +13,41 @@ Radiation registers stay zero through the 5 s delay and while 380 V is settling.
 | `0x00` | Device ID | read | `0x7D` |
 | `0x01` | Firmware version | read | `0x01` |
 | `0x02` | Reserved | read | `0x00` |
-| `0x03`..`0x05` | Dynamic radiation | read | 24-bit big-endian, 0.1 µR/h, last 10 s |
-| `0x06`..`0x08` | Static radiation | read | 24-bit big-endian, 0.1 µR/h, last 60 s |
-| `0x09`..`0x0A` | Pulse count | read | 16-bit big-endian, counts since run started |
+| `0x03`..`0x05` | Dynamic radiation | read | 24-bit big-endian, 0.1 µR/h, adaptive window under 123 s |
+| `0x06`..`0x08` | Static radiation | read | 24-bit big-endian, 0.1 µR/h, last 500 s |
+| `0x09`..`0x0A` | Pulse count | read | 16-bit big-endian. Cleared by a read of either byte |
 | `0x0B` | Reserved | read | `0x00` |
-| `0x0C` | Low-power control | read | `0x00`. Writes are ignored |
+| `0x0C` | Low-power control | read/write | `0` or `1`. Default `0`. The bit is stored and does not change voltage, frequency, or counting |
 | `0x0D`..`0x0F` | Reserved | read | `0x00` |
-| `0x10` | I2C address | read | `0x66` |
-| `0x11` | HV state | read | `0` before run, `1` while the tube is in run. Writes are ignored |
-| `0x12`..`0x13` | Sensitivity | read | little-endian `138` (`0x8A 0x00`), impulses/µR |
-| `0x14` | LED state | read | `0` before run, `1` while the tube is in run. This byte does not follow the per-pulse flash |
+| `0x10` | I2C address | read/write | Default `0x66`. A write of `0x03`..`0x77` is stored and used on the next transaction. `0x76` collides with the BME680 on this board |
+| `0x11` | HV generator | read/write | `1` on, `0` off. Default `1`. Other values are ignored. A latched fault stays `0` |
+| `0x12`..`0x13` | Sensitivity | read/write | little-endian impulses/µR, range `0`..`510`. Default `138` (`0x8A 0x00`) |
+| `0x14` | LED enable | read/write | `1` flashes on each pulse, `0` stays off. Default `1`. Other values are ignored |
 
 ## Radiation
 
-Both radiation values are dose rate, not an average of earlier readings. Each second the firmware adds that second's counts and drops the oldest second once the window is full.
+Both radiation values are dose rate. Each second the firmware adds that second's counts. `0x06` keeps the last 500 s. Until 500 s exist, the rate uses only the seconds collected so far.
 
-`0x03` uses the last 10 one-second buckets. `0x06` uses the last 60. Until that many seconds exist, the rate uses only the seconds collected so far. The first minute of `0x06` is a growing window, not a 60 s window padded with zeros.
+`0x03` keeps a window of 1..122 s. It grows by one second while it is shorter than 122 s. It shrinks to the last 10 s when that slice and the older part differ by more than a factor of two and the busier side has at least 4 counts. ClimateGuard did not publish the thresholds; this is the local approximation of the dynamic window.
 
-The unit is 0.1 µR/h. Divide the integer by 10 for µR/h, or by 1000 for µSv/h. `00 00 3C` is 60, which is 6.0 µR/h, or 0.060 µSv/h.
+The unit is 0.1 µR/h. Divide the integer by 10 for µR/h, or by 1000 for µSv/h. `00 00 3C` is 60, which is 6.0 µR/h, or 0.060 µSv/h. The register saturates at 1,440,000 (144,000.0 µR/h).
 
-The conversion uses `S = 137.5` impulses/µR:
+The conversion uses the integer in `0x12`:
 
 ```text
-µR/h = CPM * 60 / 137.5
+µR/h = CPM * 60 / S
 register = µR/h * 10
 ```
 
-`0x12` stores the nearest whole number, 138. Dose math uses 137.5. The register cannot be written.
+`S = 0` yields 0. The factory SI-29BG value is 137.5 impulses/µR. The register cannot store the half, so the default is 138. A host write replaces it. One data byte updates that byte. Two data bytes at `0x12` are little-endian. A result above 510 is ignored. Address and sensitivity are saved at EEPROM address 960. `make flash` chip-erases EEPROM and restores `0x66` and 138. HV, the LED enable, and `0x0C` return to their defaults on reset.
 
-`0x09` is the number of pulses since run started, saturated at 65535. A read does not clear it. It is not the count inside the 10 s or 60 s window.
+`0x09` is the number of pulses since the previous read of `0x09` or `0x0A`, saturated at 65535. The read clears it. A `0x0A` that follows `0x09` in the same burst is the low byte of that same snapshot. It is not the count inside the radiation windows.
+
+## Controls
+
+Write `0` to `0x11` to stop the converter. Write `1` to start it. The 500 ms wait after reset still finishes before the first start. A later write of `1` starts immediately and still waits until 380 V has held the settle band before counts begin. A latched fault ignores both writes until the next reset.
+
+`0x14` does not follow the LED pin. During the 500 ms wait the LED is on while this register is `1`, so the reset is visible. It is off while 380 V settles and while the generator is off. In run it flashes on for each pulse when the register is `1`. A fault blinks the fault pattern either way.
 
 ## Reads
 
@@ -54,6 +60,8 @@ i2c_read 0x66 0x09 2
 i2c_read 0x66 0x00 21
 ```
 
+The `0x09` read and the 21-byte read both clear the pulse counter.
+
 Linux i2c-tools:
 
 ```sh
@@ -63,4 +71,4 @@ i2ctransfer -y <bus> w1@0x66 0x09 r2
 i2cget -y <bus> 0x66 0x00
 ```
 
-`i2cget` of `0x00` returns `0x7d`. A 21-byte read from `0x00` returns device ID `0x7D`, firmware `0x01`, address `0x66` at `0x10`, and sensitivity `0x8A 0x00`.
+`i2cget` of `0x00` returns `0x7d`. A 21-byte read from `0x00` returns device ID `0x7D`, firmware `0x01`, address `0x66` at `0x10`, and sensitivity `0x8A 0x00`, unless a host has stored another address or sensitivity.

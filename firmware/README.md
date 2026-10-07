@@ -1,6 +1,6 @@
 # GeigerNode firmware
 
-Bare-metal bring-up for the ATmega328PB on GeigerNode. Characterization is frozen: nominal target 380 V, pulse cap 100 µs, production abort around 400 V. This image is the SI-29BG RadSens slave. Every reset waits 5 s, regulates 380 V at 2400 Hz, counts every falling edge on PD2, and publishes ClimateGuard-compatible registers on TWI0 address `0x66`. The map is `i2c-register-map.md`. There is no arm word. Dose uses the accepted factory Cs-137 coefficient `S = 137.5 impulses/µR`. Dynamic radiation is the last 10 s. Static radiation is the last 60 s. During the count the LED is off and flashes on for each pulse. `make flash` programs flash only. `make read-gm-test` still reads EEPROM but this image does not write a GM record.
+Bare-metal bring-up for the ATmega328PB on GeigerNode. Characterization is frozen: nominal target 380 V, pulse cap 100 µs, production abort around 400 V. This image is the SI-29BG RadSens slave. Every reset waits 500 ms, regulates 380 V at 2400 Hz, counts every falling edge on PD2, and publishes ClimateGuard RadSens registers. The default address is `0x66`. The map is `i2c-register-map.md`. There is no arm word. Dose uses the integer sensitivity register, default 138 impulses/µR. Dynamic radiation is an adaptive window under 123 s. Static radiation is the last 500 s. A host can stop and start high voltage, change the address, and change the sensitivity. During the 500 ms wait the LED is on. During the count it flashes on for each pulse while the LED register is enabled. `make flash` programs flash only and chip-erases EEPROM, which restores address `0x66` and sensitivity 138. `make read-gm-test` still reads EEPROM but this image does not write a GM record.
 
 ## Toolchain
 
@@ -39,7 +39,7 @@ make flash
 make verify
 ```
 
-`make flash` and `make verify` program flash only. `make read-fuses` only reads LFUSE, HFUSE, and EFUSE. After `make flash` the programmer reset starts the 5 s delay, then high voltage. Stay clear of the HV section.
+`make flash` and `make verify` program flash only. `make read-fuses` only reads LFUSE, HFUSE, and EFUSE. After `make flash` the programmer reset turns the LED on for 500 ms, then high voltage starts. Stay clear of the HV section. The chip erase restores I2C address `0x66` and sensitivity 138.
 
 ```sh
 make fuses

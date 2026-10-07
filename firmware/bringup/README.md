@@ -1,6 +1,6 @@
 # GeigerNode bring-up
 
-Current step: Flipper I2C bridge on 2026-10-07 lists `0x66` and `0x76`. `i2c_read 0x66 0x00 2` returned `0x7D 0x01`. `i2c_read 0x66 0x12 2` returned `0x8A 0x00`. The BME680 chip ID is `0x61`. The pin-change handler reads the address before any C prologue. Hardware TWI0 stays off and SCL is never driven. The factory Cs-137 coefficient `S = 137.5 impulses/µR` is accepted. The tube stays installed. Keep 380 V, 2400 Hz, the 100 µs cap, and zero blanking. Every reset starts the 5 s delay, then high voltage. There is no arm word. Stay clear of the HV section when flashing.
+Current step: RadSens mimic, not yet flashed. Address `0x66`, device ID `0x7D`, firmware `0x01`, sensitivity `138` unless EEPROM holds another pair. Static radiation is the last 500 s. Dynamic radiation is an adaptive window of 1..122 s. `0x09` clears on read. A host can write HV on/off, the LED enable, address `0x03`..`0x77`, and sensitivity `0`..`510`. Address and sensitivity are stored at EEPROM 960. `make flash` chip-erases that record. Hardware TWI0 stays off and SCL is never driven. Dose uses the integer sensitivity register. The tube stays installed. Keep 380 V, 2400 Hz, the 100 µs cap, and zero blanking. Every reset holds the LED on for 500 ms, then high voltage. There is no arm word. Stay clear of the HV section when flashing.
 
 The sections below are the historical bring-up record. Fuses were written once and are not to be changed.
 
@@ -739,7 +739,8 @@ CPM available and keep the tube coefficient configurable.
 
 For the installed SI-29BG, use `S = 137.5 impulses/µR` as the provisional
 Cs-137 datasheet basepoint. Published limits are 122.5–177.5 impulses/µR
-(550 +160/-60 counts/s at 4 µR/s). With the project conversion
+(550 +160/-60 counts/s at 4 µR/s). The live RadSens register is an integer,
+so the firmware default is 138 and dose uses that register. With the project conversion
 `µR/h = CPM * 60 / S`, the nominal factors are:
 
 - `µR/h = CPM * 0.43636`
@@ -835,22 +836,9 @@ converge.
 
 ## SI-29BG RadSens I2C
 
-The image now links TWI0. Address `0x66`. Device ID `0x00` is `0x7D`. A
-master write of one byte sets the register pointer. The next read, after
-STOP or a repeated START, starts at that pointer. Bytes inside one read
-burst increment. Static radiation is `0x06..0x08`, 24-bit big-endian, unit
-0.1 µR/h, last 60 s. Conversion is `µR/h = CPM * 60 / 137.5`. Dynamic
-radiation at `0x03..0x05` uses the last 10 s. Pulse count at `0x09..0x0A`
-is the measurement window, 16-bit big-endian, and is not cleared by a read
-or by removing a source. Sensitivity at `0x12..0x13` is little-endian 138.
-I2C writes after the pointer byte are ignored, so a master cannot start or
-stop high voltage.
+The live image is the RadSens slave in `i2c-register-map.md`. Default address `0x66`. Device ID `0x00` is `0x7D`. A master write of one byte sets the register pointer. Up to two data bytes after it are applied. The next read, after STOP or a repeated START, starts at that pointer. Bytes inside one read burst increment. Static radiation is `0x06..0x08`, 24-bit big-endian, unit 0.1 µR/h, last 500 s. Dynamic radiation at `0x03..0x05` is the adaptive window under 123 s. Conversion is `µR/h = CPM * 60 / S`, where `S` is the integer at `0x12`. The default is 138. Pulse count at `0x09..0x0A` is 16-bit big-endian and clears when either byte is read. `0x11` starts and stops high voltage. `0x10` and `0x12` are stored across reset until `make flash` erases EEPROM.
 
-On 2026-10-05 a host read of `0x00` returned `0x00 0x00`, then `0x3B 0xAA`
-with the source present, and every other address returned those same two
-bytes. After the first pointer change every address returned `0x00`. That
-was the high byte of a leftover dose register. A read without a pointer
-byte now starts at `0x00`. After flash:
+On 2026-10-05 a host read of `0x00` returned `0x00 0x00`, then `0x3B 0xAA` with the source present, and every other address returned those same two bytes. After the first pointer change every address returned `0x00`. That was the high byte of a leftover dose register. A read without a pointer byte now starts at `0x00`. On 2026-10-07 the Flipper bridge read `0x7D 0x01` from `0x00` and `0x8A 0x00` from `0x12` on the previous image. After the next flash:
 
 ```sh
 i2cget -y <bus> 0x66 0x00
@@ -858,16 +846,12 @@ i2ctransfer -y <bus> w1@0x66 0x00 r2
 i2ctransfer -y <bus> w1@0x66 0x03 r3
 i2ctransfer -y <bus> w1@0x66 0x06 r3
 i2ctransfer -y <bus> w1@0x66 0x12 r2
+i2ctransfer -y <bus> w1@0x66 0x09 r2
 ```
 
-Expect `0x7d`, then `0x7d 0x01`, then two different 24-bit rates, then
-`0x8a 0x00`. Read three bytes from `0x03` and `0x06`. Removing the source
-must drop `0x03` within 10 s and `0x06` within 60 s. `0x09` stays.
+Expect `0x7d`, then `0x7d 0x01`, then two 24-bit rates, then `0x8a 0x00` unless a host has stored another sensitivity. The `0x09` read returns the pulses since the previous read and clears the counter. A second immediate read of `0x09` is zero if no new edge arrived.
 
-`make flash` chip-erases EEPROM because EESAVE is unprogrammed. This image
-does not run the one-shot GM record. There is no arm word. Every reset,
-including the programmer reset after flash, starts the 5 s delay and then
-high voltage. Address `0x66` answers during that delay.
+`make flash` chip-erases EEPROM because EESAVE is unprogrammed. This image does not run the one-shot GM record. There is no arm word. Every reset, including the programmer reset after flash, holds the LED on for 500 ms and then starts high voltage. Address `0x66` answers during that wait. A stored address or sensitivity does not survive the chip erase.
 
 From `firmware/`:
 
@@ -877,14 +861,8 @@ make flash
 make verify
 ```
 
-Stay clear of the HV section. The LED slow-blinks for 5 s, fast-blinks while
-380 V settles, then stays off and flashes on for each count. Four blinks and
-a pause is a fault; high voltage is off. Do not raise the setpoint.
+Stay clear of the HV section. The LED is on for 500 ms, off while 380 V settles, then off except for a flash on each count. Four blinks and a pause is a fault; high voltage is off and a write of `1` to `0x11` does not restart it. Do not raise the setpoint.
 
-Passed on 2026-10-05. A host master sees address `0x66` and receives values.
-Exact register bytes from that read were not recorded. Background near 9 CPM
-is about 40 raw counts (4.0 µR/h). Do not treat a live reading as a
-calibration.
+The 2026-10-05 pass saw address `0x66` and received values. Exact register bytes from that read were not recorded. The 2026-10-07 Flipper pass is the one that returned `0x7D 0x01` and sensitivity `0x8A 0x00`. Background near 9 CPM is about 39 raw counts at S = 138 (3.9 µR/h). Do not treat a live reading as a calibration.
 
-Keep the DMM off the HV output. Do not probe the tube. Do not change fuses.
-Do not add dead time. Do not raise 380 V or 2400 Hz.
+Keep the DMM off the HV output. Do not probe the tube. Do not change fuses. Do not add dead time. Do not raise 380 V or 2400 Hz.
