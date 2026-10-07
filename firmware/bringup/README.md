@@ -1,6 +1,6 @@
 # GeigerNode bring-up
 
-Current step: TWI pointer fix is waiting to flash. The first dump returned one live word at every address; the next image returned `0x00` at every address because that leftover word was the dose high byte. After flash, a naked read must return `0x7D`. The factory Cs-137 coefficient `S = 137.5 impulses/µR` is accepted. The tube stays installed. Keep 380 V, 2400 Hz, the 100 µs cap, and zero blanking. Every reset starts the 5 s delay, then high voltage. There is no arm word. Stay clear of the HV section when flashing.
+Current step: Flipper I2C bridge on 2026-10-07 lists `0x66` and `0x76`. `i2c_read 0x66 0x00 2` returned `0x7D 0x01`. `i2c_read 0x66 0x12 2` returned `0x8A 0x00`. The BME680 chip ID is `0x61`. The pin-change handler reads the address before any C prologue. Hardware TWI0 stays off and SCL is never driven. The factory Cs-137 coefficient `S = 137.5 impulses/µR` is accepted. The tube stays installed. Keep 380 V, 2400 Hz, the 100 µs cap, and zero blanking. Every reset starts the 5 s delay, then high voltage. There is no arm word. Stay clear of the HV section when flashing.
 
 The sections below are the historical bring-up record. Fuses were written once and are not to be changed.
 

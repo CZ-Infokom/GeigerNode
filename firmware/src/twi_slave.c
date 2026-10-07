@@ -1,22 +1,19 @@
 #include <avr/interrupt.h>
 #include <avr/io.h>
 #include <stdint.h>
-#include <util/atomic.h>
-#include <util/twi.h>
 
+#include "board.h"
 #include "radiation.h"
 #include "twi_slave.h"
 
-#define TWI_CR_ACK ((1 << TWINT) | (1 << TWEA) | (1 << TWEN) | (1 << TWIE))
-#define TWI_CR_RECOVER \
-	((1 << TWINT) | (1 << TWSTO) | (1 << TWEA) | (1 << TWEN) | (1 << TWIE))
+#define I2C_SDA_MASK _BV(I2C_SDA_BIT)
+#define I2C_SCL_MASK _BV(I2C_SCL_BIT)
 
-static volatile uint8_t regs[TWI_REG_COUNT];
-static uint8_t txn[TWI_REG_COUNT];
-static volatile uint8_t addr_ptr;
-static uint8_t send_ptr;
-static uint8_t expect_pointer;
-static uint8_t have_new_pointer;
+static volatile uint8_t regs[2][TWI_REG_COUNT];
+static volatile uint8_t *volatile regs_pub __attribute__((used));
+static volatile uint8_t addr_ptr __attribute__((used));
+static volatile uint8_t have_new_pointer __attribute__((used));
+static volatile uint8_t last_pins __attribute__((used));
 
 static void twi_store_u24(volatile uint8_t *dest, uint32_t value)
 {
@@ -26,8 +23,13 @@ static void twi_store_u24(volatile uint8_t *dest, uint32_t value)
 	dest[2] = (uint8_t)value;
 }
 
-static void twi_fill_const(volatile uint8_t *dest)
+static void twi_fill_bank(volatile uint8_t *dest)
 {
+	uint8_t i;
+
+	for (i = 0; i < TWI_REG_COUNT; i++) {
+		dest[i] = 0;
+	}
 	dest[TWI_REG_DEVICE_ID] = TWI_REG_DEVICE_ID_VALUE;
 	dest[TWI_REG_FW_VERSION] = TWI_REG_FW_VERSION_VALUE;
 	dest[TWI_REG_ADDRESS] = TWI_SLAVE_ADDRESS;
@@ -37,115 +39,313 @@ static void twi_fill_const(volatile uint8_t *dest)
 		(uint8_t)(RADIATION_SI29BG_SENSITIVITY_REG >> 8);
 }
 
-static void twi_latch(void)
+/*
+ * PCINT1 is naked. A C prologue pushes enough registers to miss Flipper's
+ * first address bit: START hold is about 4 us and the following SCL low
+ * is about 6 us. This handler saves four registers, waits for that low,
+ * and clocks the address itself. SCL is never driven.
+ *
+ * r1 stays zero. The wait helpers and the byte reader use r0, r24, and
+ * r25, which are already on the stack.
+ */
+ISR(PCINT1_vect, ISR_NAKED)
 {
-	uint8_t i;
-
-	for (i = 0; i < TWI_REG_COUNT; i++) {
-		txn[i] = regs[i];
-	}
-	/* Constants win even if the live bank was disturbed. */
-	twi_fill_const(txn);
-}
-
-static void twi_accept_pointer(uint8_t value)
-{
-	if (value >= TWI_REG_COUNT) {
-		value = 0;
-	}
-	addr_ptr = value;
-	expect_pointer = 0;
-	have_new_pointer = 1;
-}
-
-static void twi_send_byte(void)
-{
-	TWDR0 = (send_ptr < TWI_REG_COUNT) ? txn[send_ptr] : 0;
-	if (send_ptr < (TWI_REG_COUNT - 1U)) {
-		send_ptr++;
-	}
-}
-
-ISR(TWI0_vect)
-{
-	switch (TWSR0 & 0xF8) {
-	case TW_SR_SLA_ACK:
-	case TW_SR_ARB_LOST_SLA_ACK:
-		expect_pointer = 1;
-		TWCR0 = TWI_CR_ACK;
-		break;
-
-	case TW_SR_DATA_ACK:
-	case TW_SR_DATA_NACK:
-		if (expect_pointer) {
-			twi_accept_pointer(TWDR0);
-		}
-		TWCR0 = TWI_CR_ACK;
-		break;
-
-	case TW_SR_STOP:
-		/* STOP and repeated START share this code. Do not treat
-		 * leftover TWDR0 as a pointer; that restamps 0x03/0x06
-		 * and every later read returns the 0x00 dose high byte.
-		 */
-		expect_pointer = 0;
-		TWCR0 = TWI_CR_ACK;
-		break;
-
-	case TW_ST_SLA_ACK:
-	case TW_ST_ARB_LOST_SLA_ACK:
-		twi_latch();
-		if (have_new_pointer) {
-			send_ptr = addr_ptr;
-			have_new_pointer = 0;
-		} else {
-			send_ptr = 0;
-		}
-		twi_send_byte();
-		TWCR0 = TWI_CR_ACK;
-		break;
-
-	case TW_ST_DATA_ACK:
-		twi_send_byte();
-		TWCR0 = TWI_CR_ACK;
-		break;
-
-	case TW_ST_DATA_NACK:
-	case TW_ST_LAST_DATA:
-		TWCR0 = TWI_CR_ACK;
-		break;
-
-	case TW_BUS_ERROR:
-		TWCR0 = TWI_CR_RECOVER;
-		break;
-
-	default:
-		TWCR0 = TWI_CR_ACK;
-		break;
-	}
+	asm volatile(
+		"push r0\n\t"
+		"in r0, %[sreg]\n\t"
+		"push r0\n\t"
+		"push r24\n\t"
+		"push r25\n\t"
+		"in r24, %[pin]\n\t"
+		"lds r25, last_pins\n\t"
+		"sts last_pins, r24\n\t"
+		"sbrs r24, %[sclbit]\n\t"
+		"rjmp twi_isr_done\n\t"
+		"sbrs r25, %[sdabit]\n\t"
+		"rjmp twi_isr_done\n\t"
+		"sbrc r24, %[sdabit]\n\t"
+		"rjmp twi_isr_done\n\t"
+		"rcall twi_wait_lo\n\t"
+		"brcs 1f\n\trjmp twi_isr_done\n\t1:\n\t"
+		"rcall twi_read8\n\t"
+		"brcs 1f\n\trjmp twi_isr_done\n\t1:\n\t"
+		"mov r24, r25\n\t"
+		"lsr r24\n\t"
+		"cpi r24, %[addr]\n\t"
+		"breq 1f\n\trjmp twi_isr_done\n\t1:\n\t"
+		"rcall twi_wait_lo\n\t"
+		"brcs 1f\n\trjmp twi_isr_done\n\t1:\n\t"
+		"cbi %[port], %[sdabit]\n\t"
+		"sbi %[ddr], %[sdabit]\n\t"
+		/* ACK is sampled on the next high. Release only after it falls. */
+		"rcall twi_wait_hi\n\t"
+		"brcs 1f\n\trjmp twi_rel_done\n\t1:\n\t"
+		/* Load the read byte during this high, then drive bit 7 on the fall. */
+		"sbrc r25, 0\n\t"
+		"rjmp twi_read_data\n\t"
+		"rcall twi_wait_lo\n\t"
+		"brcs 1f\n\trjmp twi_rel_done\n\t1:\n\t"
+		"cbi %[ddr], %[sdabit]\n\t"
+		"cbi %[port], %[sdabit]\n\t"
+		"rcall twi_read8\n\t"
+		"brcs 1f\n\trjmp twi_isr_done\n\t1:\n\t"
+		"rcall twi_wait_lo\n\t"
+		"brcs 1f\n\trjmp twi_isr_done\n\t1:\n\t"
+		"cbi %[port], %[sdabit]\n\t"
+		"sbi %[ddr], %[sdabit]\n\t"
+		"cpi r25, %[nreg]\n\t"
+		"brlo twi_ptr_ok\n\t"
+		"ldi r25, 0\n\t"
+		"twi_ptr_ok:\n\t"
+		"sts addr_ptr, r25\n\t"
+		"ldi r24, 1\n\t"
+		"sts have_new_pointer, r24\n\t"
+		"rcall twi_wait_hi\n\t"
+		"brcs 1f\n\trjmp twi_rel_done\n\t1:\n\t"
+		"rcall twi_wait_lo\n\t"
+		"brcs 1f\n\trjmp twi_rel_done\n\t1:\n\t"
+		"cbi %[ddr], %[sdabit]\n\t"
+		"cbi %[port], %[sdabit]\n\t"
+		/* Pointer byte is done. Next is STOP, another byte, or Sr. */
+		"twi_after_ptr:\n\t"
+		"rcall twi_wait_hi\n\t"
+		"brcs 1f\n\trjmp twi_isr_done\n\t1:\n\t"
+		"in r0, %[pin]\n\t"
+		"ldi r24, 0\n\t"
+		"twi_watch_sr:\n\t"
+		"dec r24\n\t"
+		"brne 1f\n\t"
+		"rjmp twi_isr_done\n\t"
+		"1:\n\t"
+		"sbis %[pin], %[sclbit]\n\t"
+		"rjmp twi_extra_byte\n\t"
+		"in r25, %[pin]\n\t"
+		"sbrs r0, %[sdabit]\n\t"
+		"rjmp twi_watch_upd\n\t"
+		"sbrc r25, %[sdabit]\n\t"
+		"rjmp twi_watch_upd\n\t"
+		/* Previous SDA was high and it is low now: repeated START. */
+		"rcall twi_wait_lo\n\t"
+		"brcs 1f\n\trjmp twi_isr_done\n\t1:\n\t"
+		"rcall twi_read8\n\t"
+		"brcs 1f\n\trjmp twi_isr_done\n\t1:\n\t"
+		"mov r24, r25\n\t"
+		"lsr r24\n\t"
+		"cpi r24, %[addr]\n\t"
+		"breq 1f\n\trjmp twi_isr_done\n\t1:\n\t"
+		"rcall twi_wait_lo\n\t"
+		"brcs 1f\n\trjmp twi_isr_done\n\t1:\n\t"
+		"cbi %[port], %[sdabit]\n\t"
+		"sbi %[ddr], %[sdabit]\n\t"
+		"rcall twi_wait_hi\n\t"
+		"brcs 1f\n\trjmp twi_rel_done\n\t1:\n\t"
+		"sbrs r25, 0\n\t"
+		"rjmp twi_write_again\n\t"
+		"rjmp twi_read_data\n\t"
+		"twi_write_again:\n\t"
+		"rcall twi_wait_lo\n\t"
+		"brcs 1f\n\trjmp twi_rel_done\n\t1:\n\t"
+		"cbi %[ddr], %[sdabit]\n\t"
+		"cbi %[port], %[sdabit]\n\t"
+		"rjmp twi_after_ptr\n\t"
+		"twi_read_data:\n\t"
+		"push r22\n\t"
+		"push r23\n\t"
+		"push r26\n\t"
+		"push r27\n\t"
+		"ldi r22, %[nreg]\n\t"
+		"lds r24, have_new_pointer\n\t"
+		"tst r24\n\t"
+		"breq twi_ptr_zero\n\t"
+		"lds r24, addr_ptr\n\t"
+		"rjmp twi_ptr_have\n\t"
+		"twi_ptr_zero:\n\t"
+		"ldi r24, 0\n\t"
+		"twi_ptr_have:\n\t"
+		"ldi r25, 0\n\t"
+		"sts have_new_pointer, r25\n\t"
+		"sts addr_ptr, r24\n\t"
+		"lds r26, regs_pub\n\t"
+		"lds r27, regs_pub+1\n\t"
+		"add r26, r24\n\t"
+		"ldi r25, 0\n\t"
+		"adc r27, r25\n\t"
+		"ld r25, X\n\t"
+		"rcall twi_wait_lo\n\t"
+		"brcs 1f\n\trjmp twi_read_leave\n\t1:\n\t"
+		"rjmp twi_send_byte\n\t"
+		"twi_next_byte:\n\t"
+		"lds r24, addr_ptr\n\t"
+		"cpi r24, %[last]\n\t"
+		"brsh twi_send_ff\n\t"
+		"inc r24\n\t"
+		"twi_load_send:\n\t"
+		"sts addr_ptr, r24\n\t"
+		"lds r26, regs_pub\n\t"
+		"lds r27, regs_pub+1\n\t"
+		"add r26, r24\n\t"
+		"ldi r25, 0\n\t"
+		"adc r27, r25\n\t"
+		"ld r25, X\n\t"
+		"rjmp twi_send_byte\n\t"
+		"twi_send_ff:\n\t"
+		"ldi r25, 0xFF\n\t"
+		"twi_send_byte:\n\t"
+		"ldi r23, 8\n\t"
+		"twi_send_bit:\n\t"
+		"lsl r25\n\t"
+		"brcs twi_bit_one\n\t"
+		"cbi %[port], %[sdabit]\n\t"
+		"sbi %[ddr], %[sdabit]\n\t"
+		"rjmp twi_bit_clock\n\t"
+		"twi_bit_one:\n\t"
+		"cbi %[ddr], %[sdabit]\n\t"
+		"twi_bit_clock:\n\t"
+		"rcall twi_wait_hi\n\t"
+		"brcs 1f\n\trjmp twi_read_leave\n\t1:\n\t"
+		"rcall twi_wait_lo\n\t"
+		"brcs 1f\n\trjmp twi_read_leave\n\t1:\n\t"
+		"dec r23\n\t"
+		"brne twi_send_bit\n\t"
+		"cbi %[ddr], %[sdabit]\n\t"
+		"cbi %[port], %[sdabit]\n\t"
+		"rcall twi_wait_hi\n\t"
+		"brcs 1f\n\trjmp twi_read_leave\n\t1:\n\t"
+		"in r0, %[pin]\n\t"
+		"rcall twi_wait_lo\n\t"
+		"brcs 1f\n\trjmp twi_read_leave\n\t1:\n\t"
+		"sbrc r0, %[sdabit]\n\t"
+		"rjmp twi_read_leave\n\t"
+		"dec r22\n\t"
+		"brne twi_next_byte\n\t"
+		"twi_read_leave:\n\t"
+		"pop r27\n\t"
+		"pop r26\n\t"
+		"pop r23\n\t"
+		"pop r22\n\t"
+		"rjmp twi_rel_done\n\t"
+		"twi_watch_upd:\n\t"
+		"mov r0, r25\n\t"
+		"rjmp twi_watch_sr\n\t"
+		"twi_extra_byte:\n\t"
+		"push r22\n\t"
+		"ldi r22, 7\n\t"
+		"twi_extra_bit:\n\t"
+		"rcall twi_wait_hi\n\t"
+		"brcs 1f\n\trjmp twi_extra_fail\n\t1:\n\t"
+		"rcall twi_wait_lo\n\t"
+		"brcs 1f\n\trjmp twi_extra_fail\n\t1:\n\t"
+		"dec r22\n\t"
+		"brne twi_extra_bit\n\t"
+		"pop r22\n\t"
+		"cbi %[port], %[sdabit]\n\t"
+		"sbi %[ddr], %[sdabit]\n\t"
+		"rcall twi_wait_hi\n\t"
+		"brcs 1f\n\trjmp twi_rel_done\n\t1:\n\t"
+		"rcall twi_wait_lo\n\t"
+		"brcs 1f\n\trjmp twi_rel_done\n\t1:\n\t"
+		"cbi %[ddr], %[sdabit]\n\t"
+		"cbi %[port], %[sdabit]\n\t"
+		"rjmp twi_after_ptr\n\t"
+		"twi_extra_fail:\n\t"
+		"pop r22\n\t"
+		"rjmp twi_isr_done\n\t"
+		"twi_rel_done:\n\t"
+		"cbi %[ddr], %[sdabit]\n\t"
+		"cbi %[port], %[sdabit]\n\t"
+		"twi_isr_done:\n\t"
+		"in r24, %[pin]\n\t"
+		"sts last_pins, r24\n\t"
+		"ldi r24, %[pcif1]\n\t"
+		"out %[pcifr], r24\n\t"
+		"pop r25\n\t"
+		"pop r24\n\t"
+		"pop r0\n\t"
+		"out %[sreg], r0\n\t"
+		"pop r0\n\t"
+		"reti\n\t"
+		/* SCL low already. Read 8 bits. Return the byte in r25, C set. */
+		"twi_read8:\n\t"
+		"push r22\n\t"
+		"ldi r25, 0\n\t"
+		"ldi r22, 8\n\t"
+		"twi_read8_bit:\n\t"
+		"rcall twi_wait_hi\n\t"
+		"brcs 1f\n\trjmp twi_read8_fail\n\t1:\n\t"
+		"lsl r25\n\t"
+		"sbic %[pin], %[sdabit]\n\t"
+		"ori r25, 1\n\t"
+		"dec r22\n\t"
+		"breq twi_read8_ok\n\t"
+		"rcall twi_wait_lo\n\t"
+		"brcs 1f\n\trjmp twi_read8_fail\n\t1:\n\t"
+		"rjmp twi_read8_bit\n\t"
+		"twi_read8_ok:\n\t"
+		"pop r22\n\t"
+		"sec\n\t"
+		"ret\n\t"
+		"twi_read8_fail:\n\t"
+		"pop r22\n\t"
+		"clc\n\t"
+		"ret\n\t"
+		"twi_wait_hi:\n\t"
+		"ldi r24, 0\n\t"
+		"twi_wait_hi_loop:\n\t"
+		"dec r24\n\t"
+		"breq twi_wait_fail\n\t"
+		"sbis %[pin], %[sclbit]\n\t"
+		"rjmp twi_wait_hi_loop\n\t"
+		"sec\n\t"
+		"ret\n\t"
+		"twi_wait_lo:\n\t"
+		"ldi r24, 0\n\t"
+		"twi_wait_lo_loop:\n\t"
+		"dec r24\n\t"
+		"breq twi_wait_fail\n\t"
+		"sbic %[pin], %[sclbit]\n\t"
+		"rjmp twi_wait_lo_loop\n\t"
+		"sec\n\t"
+		"ret\n\t"
+		"twi_wait_fail:\n\t"
+		"clc\n\t"
+		"ret\n\t"
+		:
+		:
+		[sreg] "I"(_SFR_IO_ADDR(SREG)),
+		[pin] "I"(_SFR_IO_ADDR(PINC)),
+		[ddr] "I"(_SFR_IO_ADDR(DDRC)),
+		[port] "I"(_SFR_IO_ADDR(PORTC)),
+		[pcifr] "I"(_SFR_IO_ADDR(PCIFR)),
+		[sclbit] "I"(I2C_SCL_BIT),
+		[sdabit] "I"(I2C_SDA_BIT),
+		[addr] "M"(TWI_SLAVE_ADDRESS),
+		[nreg] "M"(TWI_REG_COUNT),
+		[last] "M"(TWI_REG_COUNT - 1),
+		[pcif1] "M"(1 << PCIF1)
+		:
+		"memory");
 }
 
 void twi_slave_init(void)
 {
-	uint8_t i;
-
-	for (i = 0; i < TWI_REG_COUNT; i++) {
-		regs[i] = 0;
-	}
-	twi_fill_const(regs);
-	regs[TWI_REG_LED] = 0;
-
+	twi_fill_bank(regs[0]);
+	twi_fill_bank(regs[1]);
+	regs_pub = regs[0];
 	addr_ptr = 0;
-	send_ptr = 0;
-	expect_pointer = 0;
 	have_new_pointer = 0;
 
-	/* Slave does not generate the clock. External 4.7 kOhm pull-ups hold the bus. */
-	TWSR0 = 0;
-	TWBR0 = 0;
-	TWAR0 = TWI_SLAVE_ADDRESS << 1;
-	TWAMR0 = 0;
-	TWCR0 = TWI_CR_ACK;
+	TWCR0 = 0;
+	DIDR0 &= (uint8_t)~(_BV(ADC4D) | _BV(ADC5D));
+	I2C_SDA_DDR &= ~I2C_SDA_MASK;
+	I2C_SCL_DDR &= ~I2C_SCL_MASK;
+	I2C_SDA_PORT &= ~I2C_SDA_MASK;
+	I2C_SCL_PORT &= ~I2C_SCL_MASK;
+
+	last_pins = I2C_SCL_PIN;
+	PCMSK1 |= I2C_SDA_MASK;
+	PCMSK1 &= (uint8_t)~I2C_SCL_MASK;
+	PCIFR = _BV(PCIF1);
+	PCICR |= _BV(PCIE1);
 }
 
 void twi_slave_publish(uint32_t dynamic_x10,
@@ -153,13 +353,15 @@ void twi_slave_publish(uint32_t dynamic_x10,
 		       uint16_t pulses,
 		       uint8_t hv_on)
 {
-	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-		twi_fill_const(regs);
-		twi_store_u24(&regs[TWI_REG_DYNAMIC_RAD], dynamic_x10);
-		twi_store_u24(&regs[TWI_REG_STATIC_RAD], static_x10);
-		regs[TWI_REG_PULSE_COUNT] = (uint8_t)(pulses >> 8);
-		regs[TWI_REG_PULSE_COUNT + 1U] = (uint8_t)pulses;
-		regs[TWI_REG_HV_ENABLE] = hv_on ? 1U : 0U;
-		regs[TWI_REG_LED] = hv_on ? 1U : 0U;
-	}
+	uint8_t i = (uint8_t)((regs_pub == regs[1]) ? 0U : 1U);
+	volatile uint8_t *dest = regs[i];
+
+	twi_fill_bank(dest);
+	twi_store_u24(&dest[TWI_REG_DYNAMIC_RAD], dynamic_x10);
+	twi_store_u24(&dest[TWI_REG_STATIC_RAD], static_x10);
+	dest[TWI_REG_PULSE_COUNT] = (uint8_t)(pulses >> 8);
+	dest[TWI_REG_PULSE_COUNT + 1U] = (uint8_t)pulses;
+	dest[TWI_REG_HV_ENABLE] = hv_on ? 1U : 0U;
+	dest[TWI_REG_LED] = hv_on ? 1U : 0U;
+	regs_pub = dest;
 }

@@ -12,7 +12,9 @@
  * GM_PULSE is PD2 / INT0, active low, falling edge. The pin is an input with a pull-up.
  * PD3 is spare and stays untouched.
  * HV_ADC is PC0 / ADC0. The default image leaves the converter off while it is read.
- * TWI0 slave address is 0x66. SDA is PC4 and SCL is PC5.
+ * I2C slave address is 0x66. SDA is PC4 and SCL is PC5. Hardware TWI0
+ * stays off so it cannot hold SCL. A START on SDA is handled by pin
+ * change, then the transaction is polled. SCL is never driven.
  * Timer2 is the millisecond tick. Its pin outputs stay disconnected.
  * Timer1 is the HV pulse. Its hard maximum width is 100 us.
  * Every reset waits 5 s, then regulates 380 V at 2400 Hz and publishes
@@ -35,5 +37,14 @@
 #define GM_PULSE_PORT     PORTD
 #define GM_PULSE_DDR_BIT  DDD2
 #define GM_PULSE_PORT_BIT PORTD2
+
+#define I2C_SDA_DDR       DDRC
+#define I2C_SDA_PORT      PORTC
+#define I2C_SDA_PIN       PINC
+#define I2C_SDA_BIT       PC4
+#define I2C_SCL_DDR       DDRC
+#define I2C_SCL_PORT      PORTC
+#define I2C_SCL_PIN       PINC
+#define I2C_SCL_BIT       PC5
 
 #endif

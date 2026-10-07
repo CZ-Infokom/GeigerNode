@@ -1,6 +1,6 @@
 # GeigerNode firmware
 
-Bare-metal bring-up for the ATmega328PB on GeigerNode. Characterization is frozen: nominal target 380 V, pulse cap 100 µs, production abort around 400 V. This image is the SI-29BG RadSens slave. Every reset waits 5 s, regulates 380 V at 2400 Hz, counts every falling edge on PD2, and publishes ClimateGuard-compatible registers on TWI0 address `0x66`. There is no arm word. Dose uses the accepted factory Cs-137 coefficient `S = 137.5 impulses/µR`. Dynamic radiation is the last 10 s. Static radiation is the last 60 s. During the count the LED is off and flashes on for each pulse. `make flash` programs flash only. `make read-gm-test` still reads EEPROM but this image does not write a GM record.
+Bare-metal bring-up for the ATmega328PB on GeigerNode. Characterization is frozen: nominal target 380 V, pulse cap 100 µs, production abort around 400 V. This image is the SI-29BG RadSens slave. Every reset waits 5 s, regulates 380 V at 2400 Hz, counts every falling edge on PD2, and publishes ClimateGuard-compatible registers on TWI0 address `0x66`. The map is `i2c-register-map.md`. There is no arm word. Dose uses the accepted factory Cs-137 coefficient `S = 137.5 impulses/µR`. Dynamic radiation is the last 10 s. Static radiation is the last 60 s. During the count the LED is off and flashes on for each pulse. `make flash` programs flash only. `make read-gm-test` still reads EEPROM but this image does not write a GM record.
 
 ## Toolchain
 
