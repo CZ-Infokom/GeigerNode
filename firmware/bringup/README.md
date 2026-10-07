@@ -1,6 +1,6 @@
 # GeigerNode bring-up
 
-Current step: RadSens mimic, not yet flashed. Address `0x66`, device ID `0x7D`, firmware `0x01`, sensitivity `138` unless EEPROM holds another pair. Static radiation is the last 500 s. Dynamic radiation is an adaptive window of 1..122 s. `0x09` clears on read. A host can write HV on/off, the LED enable, address `0x03`..`0x77`, and sensitivity `0`..`510`. Address and sensitivity are stored at EEPROM 960. `make flash` chip-erases that record. Hardware TWI0 stays off and SCL is never driven. Dose uses the integer sensitivity register. The tube stays installed. Keep 380 V, 2400 Hz, the 100 µs cap, and zero blanking. Every reset holds the LED on for 500 ms, then high voltage. There is no arm word. Stay clear of the HV section when flashing.
+Current step: RadSens mimic, not yet flashed. Address `0x66`, device ID `0x7D`, firmware `0x02`, sensitivity `138` unless EEPROM holds another pair. Static radiation is the last 500 s. Dynamic radiation is an adaptive window of 1..122 s. `0x09` clears on read. A host can write HV on/off, the LED enable, address `0x03`..`0x77`, and sensitivity `0`..`510`. Address and sensitivity are stored at EEPROM 960. `make flash` chip-erases that record. Hardware TWI0 stays off and SCL is never driven. Dose uses the integer sensitivity register. The tube stays installed. Keep 380 V, 2400 Hz, the 100 µs cap, and zero blanking. Every reset holds the LED on for 500 ms, then high voltage. There is no arm word. Stay clear of the HV section when flashing.
 
 The sections below are the historical bring-up record. Fuses were written once and are not to be changed.
 
@@ -849,7 +849,7 @@ i2ctransfer -y <bus> w1@0x66 0x12 r2
 i2ctransfer -y <bus> w1@0x66 0x09 r2
 ```
 
-Expect `0x7d`, then `0x7d 0x01`, then two 24-bit rates, then `0x8a 0x00` unless a host has stored another sensitivity. The `0x09` read returns the pulses since the previous read and clears the counter. A second immediate read of `0x09` is zero if no new edge arrived.
+Expect `0x7d`, then `0x7d 0x02`, then two 24-bit rates, then `0x8a 0x00` unless a host has stored another sensitivity. The `0x09` read returns the pulses since the previous read and clears the counter. A second immediate read of `0x09` is zero if no new edge arrived.
 
 `make flash` chip-erases EEPROM because EESAVE is unprogrammed. This image does not run the one-shot GM record. There is no arm word. Every reset, including the programmer reset after flash, holds the LED on for 500 ms and then starts high voltage. Address `0x66` answers during that wait. A stored address or sensitivity does not survive the chip erase.
 
@@ -861,7 +861,7 @@ make flash
 make verify
 ```
 
-Stay clear of the HV section. The LED is on for 500 ms, off while 380 V settles, then off except for a flash on each count. Four blinks and a pause is a fault; high voltage is off and a write of `1` to `0x11` does not restart it. Do not raise the setpoint.
+Stay clear of the HV section. The LED is on for 500 ms, off while 380 V settles, then off except for a flash on each count. A startup timeout, a settle timeout, or the 400 V abort turns the switch off and retries: four starts, with waits of 30 s, 2 min, and 10 min. During a wait the LED blinks once every 2 s. Four blinks and a pause means give-up; high voltage stays off until a write of `1` to `0x11`. An illegal pulse or rate gives up on the first failure. Do not raise the setpoint.
 
 The 2026-10-05 pass saw address `0x66` and received values. Exact register bytes from that read were not recorded. The 2026-10-07 Flipper pass is the one that returned `0x7D 0x01` and sensitivity `0x8A 0x00`. Background near 9 CPM is about 39 raw counts at S = 138 (3.9 µR/h). Do not treat a live reading as a calibration.
 

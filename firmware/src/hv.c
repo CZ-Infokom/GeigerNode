@@ -576,6 +576,13 @@ void hv_gm_stop(void)
 	active_frequency_hz = 0;
 }
 
+void hv_gm_quiesce(void)
+{
+	hv_disconnect();
+	regulator_state = HV_OFF;
+	active_frequency_hz = 0;
+}
+
 uint8_t hv_is_starting(void)
 {
 	return regulator_state == HV_STARTING;

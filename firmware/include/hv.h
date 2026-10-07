@@ -7,7 +7,9 @@
  * SI-29BG bring-up. The regulator target is 380 V at 2400 Hz.
  * Pulse cap is 100 us. The hard abort is 932 counts, around 400 V.
  * No controller state may start a higher target, a higher rate, or a
- * wider pulse. A fault latches PB1 low. There is no automatic restart.
+ * wider pulse. A fault forces PB1 low and disconnects OC1A. This module
+ * does not restart itself. hv_gm_quiesce() returns it to HV_OFF so the
+ * application can start the same 380 V point again.
  *
  * The one-shot characterization tables remain in this file.
  * This image does not run them. The 2500 Hz production hold is closed.
@@ -155,6 +157,8 @@ uint8_t hv_bench_indicator(void);
 uint8_t hv_gm_begin(uint16_t now_ms);
 void hv_gm_poll(uint16_t now_ms);
 void hv_gm_stop(void);
+/* Disconnect OC1A, drive PB1 low, and leave HV_OFF. Does not clear the latched status. */
+void hv_gm_quiesce(void);
 uint8_t hv_is_starting(void);
 uint8_t hv_is_regulating(void);
 uint8_t hv_is_fault(void);

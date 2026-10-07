@@ -35,14 +35,33 @@ _Static_assert(TWI_REG_COUNT > TWI_REG_LED, "RadSens map includes 0x14");
 #define APP_SHRINK_COUNTS   4U
 #define GM_PULSE_LED_MS     40UL
 
+/*
+ * Four starts. After an operational fault the switch stays off for 30 s,
+ * then 2 min, then 10 min. The fourth failure latches off. Ten continuous
+ * minutes in run clears the count. An illegal pulse or rate does not retry.
+ */
+#define APP_ATTEMPTS        4U
+#define APP_COOLDOWN_1_MS   30000UL
+#define APP_COOLDOWN_2_MS   120000UL
+#define APP_COOLDOWN_3_MS   600000UL
+#define APP_BUDGET_CLEAR_MS (10UL * 60UL * 1000UL)
+#define APP_COOLDOWN_BLINK_MS 2000UL
+#define APP_COOLDOWN_ON_MS    100UL
+
 _Static_assert(APP_DYNAMIC_MAX < APP_STATIC_S, "dynamic window fits in the static buffer");
 _Static_assert(APP_DYNAMIC_RECENT < APP_DYNAMIC_MAX, "shrink leaves an older slice");
+_Static_assert(APP_ATTEMPTS == 4U, "four HV starts before give-up");
+_Static_assert(APP_COOLDOWN_1_MS < APP_COOLDOWN_2_MS, "first cooldown is shortest");
+_Static_assert(APP_COOLDOWN_2_MS < APP_COOLDOWN_3_MS, "cooldowns lengthen");
+_Static_assert(TWI_REG_FW_VERSION_VALUE == 2U, "firmware version is 2");
+_Static_assert(TWI_REG_HV_STATUS == 0x0BU, "HV status is register 0x0B");
 
-#define APP_DELAY  0U
-#define APP_SETTLE 1U
-#define APP_RUN    2U
-#define APP_FAULT  3U
-#define APP_IDLE   4U
+#define APP_DELAY    0U
+#define APP_SETTLE   1U
+#define APP_RUN      2U
+#define APP_FAULT    3U
+#define APP_IDLE     4U
+#define APP_COOLDOWN 5U
 
 static uint16_t cps_buckets[APP_STATIC_S];
 static uint16_t cps_pos;
@@ -91,6 +110,29 @@ static void led_fault(uint32_t now_ms, uint32_t *last_ms, uint8_t *step)
 	*last_ms = now_ms;
 	*step = (uint8_t)((*step + 1U) % 9U);
 	gpio_led_set(level[*step]);
+}
+
+static void led_cooldown(uint32_t now_ms, uint32_t *last_ms)
+{
+	uint32_t phase = now_ms - *last_ms;
+
+	if (phase >= APP_COOLDOWN_BLINK_MS) {
+		*last_ms = now_ms;
+		gpio_led_set(1);
+		return;
+	}
+	gpio_led_set(phase < APP_COOLDOWN_ON_MS);
+}
+
+static uint32_t cooldown_ms_for(uint8_t attempts)
+{
+	if (attempts <= 1U) {
+		return APP_COOLDOWN_1_MS;
+	}
+	if (attempts == 2U) {
+		return APP_COOLDOWN_2_MS;
+	}
+	return APP_COOLDOWN_3_MS;
 }
 
 static uint8_t hv_in_band(void)
@@ -213,34 +255,78 @@ static void publish_rates(void)
 	radsens_publish_radiation(dynamic_x10, static_x10);
 }
 
-static void enter_fault(uint8_t *app)
+static void enter_fault(uint8_t attempts, uint32_t now_ms, uint32_t *last_ms,
+			uint8_t *fault_step, uint8_t *app)
 {
+	hv_gm_quiesce();
 	gm_counter_close_window();
 	radsens_on_fault();
 	radsens_publish_radiation(0, 0);
+	radsens_set_hv_status(RADSENS_HV_GIVEN_UP, attempts);
+	*fault_step = 0;
+	*last_ms = now_ms;
+	gpio_led_set(1);
 	*app = APP_FAULT;
 }
 
-static void enter_idle(uint8_t *app)
+static void enter_idle(uint8_t *attempts, uint8_t *app)
 {
-	hv_gm_stop();
+	hv_gm_quiesce();
 	gm_counter_close_window();
 	radsens_publish_radiation(0, 0);
+	*attempts = 0;
+	radsens_set_hv_status(RADSENS_HV_FOLLOWING, 0);
 	gpio_led_set(0);
 	*app = APP_IDLE;
 }
 
-static void enter_settle(uint32_t now_ms, uint32_t *phase_ms, uint32_t *settle_ok_ms,
-			 uint8_t *app)
+static void enter_cooldown(uint8_t attempts, uint32_t now_ms, uint32_t *phase_ms,
+			   uint32_t *cooldown_ms, uint32_t *last_ms, uint8_t *app)
 {
-	if (hv_gm_begin((uint16_t)now_ms)) {
-		*phase_ms = now_ms;
-		*settle_ok_ms = 0;
-		gpio_led_set(0);
-		*app = APP_SETTLE;
-	} else {
-		enter_fault(app);
+	hv_gm_quiesce();
+	gm_counter_close_window();
+	radsens_publish_radiation(0, 0);
+	radsens_set_hv_status(RADSENS_HV_COOLDOWN, attempts);
+	*phase_ms = now_ms;
+	*cooldown_ms = cooldown_ms_for(attempts);
+	*last_ms = now_ms;
+	gpio_led_set(1);
+	*app = APP_COOLDOWN;
+}
+
+static void fail_hv(uint16_t status, uint8_t *attempts, uint32_t now_ms,
+		    uint32_t *phase_ms, uint32_t *cooldown_ms, uint32_t *last_ms,
+		    uint8_t *fault_step, uint8_t *app)
+{
+	/*
+	 * A cleared budget means this run is the first start of a new
+	 * series. Count it before deciding to wait or give up.
+	 */
+	if (*attempts == 0U) {
+		*attempts = 1U;
 	}
+	if (status == HV_TEST_FAULT || *attempts >= APP_ATTEMPTS) {
+		enter_fault(*attempts, now_ms, last_ms, fault_step, app);
+		return;
+	}
+	enter_cooldown(*attempts, now_ms, phase_ms, cooldown_ms, last_ms, app);
+}
+
+static uint8_t enter_settle(uint32_t now_ms, uint32_t *phase_ms, uint32_t *settle_ok_ms,
+			    uint8_t *attempts, uint8_t *app)
+{
+	if (!hv_gm_begin((uint16_t)now_ms)) {
+		return 0;
+	}
+	if (*attempts < 255U) {
+		(*attempts)++;
+	}
+	radsens_set_hv_status(RADSENS_HV_FOLLOWING, *attempts);
+	*phase_ms = now_ms;
+	*settle_ok_ms = 0;
+	gpio_led_set(0);
+	*app = APP_SETTLE;
+	return 1;
 }
 
 static void enter_run(uint32_t now_ms, uint32_t *last_publish_ms,
@@ -263,10 +349,13 @@ int main(void)
 	uint32_t pulse_on_until = 0;
 	uint32_t phase_ms = 0;
 	uint32_t settle_ok_ms = 0;
+	uint32_t cooldown_ms = 0;
+	uint32_t run_ok_ms = 0;
 	uint32_t last_publish_ms = 0;
 	uint32_t counted_window = 0;
 	uint32_t bucket_window = 0;
 	uint8_t fault_step = 0;
+	uint8_t attempts = 0;
 	uint8_t app = APP_DELAY;
 
 	MCUSR = 0;
@@ -291,7 +380,11 @@ int main(void)
 			gpio_led_set(radsens_led_enabled());
 			if (now_ms >= APP_PRE_HV_MS) {
 				if (hv_cmd) {
-					enter_settle(now_ms, &phase_ms, &settle_ok_ms, &app);
+					if (!enter_settle(now_ms, &phase_ms, &settle_ok_ms,
+							  &attempts, &app)) {
+						enter_fault(attempts, now_ms, &last_toggle_ms,
+							    &fault_step, &app);
+					}
 				} else {
 					gpio_led_set(0);
 					app = APP_IDLE;
@@ -300,24 +393,50 @@ int main(void)
 		} else if (app == APP_IDLE) {
 			gpio_led_set(0);
 			if (hv_cmd) {
-				enter_settle(now_ms, &phase_ms, &settle_ok_ms, &app);
+				if (!enter_settle(now_ms, &phase_ms, &settle_ok_ms,
+						  &attempts, &app)) {
+					enter_fault(attempts, now_ms, &last_toggle_ms,
+						    &fault_step, &app);
+				}
 			}
 		} else if (app == APP_FAULT) {
 			led_fault(now_ms, &last_toggle_ms, &fault_step);
+			if (hv_cmd) {
+				attempts = 0;
+				if (!enter_settle(now_ms, &phase_ms, &settle_ok_ms,
+						  &attempts, &app)) {
+					enter_fault(attempts, now_ms, &last_toggle_ms,
+						    &fault_step, &app);
+				}
+			}
+		} else if (app == APP_COOLDOWN) {
+			led_cooldown(now_ms, &last_toggle_ms);
+			if (!hv_cmd) {
+				enter_idle(&attempts, &app);
+			} else if ((now_ms - phase_ms) >= cooldown_ms) {
+				if (!enter_settle(now_ms, &phase_ms, &settle_ok_ms,
+						  &attempts, &app)) {
+					enter_fault(attempts, now_ms, &last_toggle_ms,
+						    &fault_step, &app);
+				}
+			}
 		} else if (!hv_cmd) {
-			enter_idle(&app);
+			enter_idle(&attempts, &app);
 		} else {
 			hv_gm_poll((uint16_t)now_ms);
 			if (hv_is_fault()) {
-				enter_fault(&app);
+				fail_hv(hv_latched_status(), &attempts, now_ms, &phase_ms,
+					&cooldown_ms, &last_toggle_ms, &fault_step, &app);
 			} else if (app == APP_SETTLE) {
 				if ((now_ms - phase_ms) >= HV_SETTLE_TIMEOUT_MS) {
-					hv_gm_stop();
-					enter_fault(&app);
+					fail_hv(hv_latched_status(), &attempts, now_ms,
+						&phase_ms, &cooldown_ms, &last_toggle_ms,
+						&fault_step, &app);
 				} else if (hv_is_regulating() && hv_in_band()) {
 					if (settle_ok_ms == 0UL) {
 						settle_ok_ms = now_ms;
 					} else if ((now_ms - settle_ok_ms) >= HV_SETTLE_HOLD_MS) {
+						run_ok_ms = now_ms;
 						enter_run(now_ms, &last_publish_ms,
 							  &counted_window, &bucket_window,
 							  &app);
@@ -329,6 +448,11 @@ int main(void)
 				uint32_t window = gm_counter_window();
 				uint32_t add = window - counted_window;
 
+				if (attempts != 0U &&
+				    (now_ms - run_ok_ms) >= APP_BUDGET_CLEAR_MS) {
+					attempts = 0;
+					radsens_set_hv_status(RADSENS_HV_FOLLOWING, 0);
+				}
 				counted_window = window;
 				if (add > 65535UL) {
 					add = 65535UL;

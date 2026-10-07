@@ -33,7 +33,6 @@ static uint8_t device_address;
 static uint16_t sensitivity;
 static uint8_t hv_command;
 static uint8_t led_enabled;
-static uint8_t fault_latched;
 
 static uint8_t nvm_sum(const struct radsens_nvm *nvm)
 {
@@ -115,7 +114,7 @@ static void apply_write(const struct twi_write_cmd *cmd)
 		return;
 	}
 	if (cmd->ptr == TWI_REG_HV_ENABLE) {
-		if (fault_latched || value > 1U || value == hv_command) {
+		if (value > 1U || value == hv_command) {
 			return;
 		}
 		hv_command = value;
@@ -144,7 +143,6 @@ void radsens_init(void)
 	sensitivity = RADIATION_SI29BG_SENSITIVITY_REG;
 	hv_command = 1U;
 	led_enabled = 1U;
-	fault_latched = 0U;
 
 	eeprom_read_block(&nvm, (const void *)RADSENS_NVM_ADDR, sizeof nvm);
 	if (nvm_valid(&nvm, &loaded)) {
@@ -176,9 +174,19 @@ void radsens_publish_radiation(uint32_t dynamic_x10, uint32_t static_x10)
 
 void radsens_on_fault(void)
 {
-	fault_latched = 1U;
 	hv_command = 0U;
 	twi_slave_set_hv_command(0);
+}
+
+void radsens_set_hv_status(uint8_t state, uint8_t attempts)
+{
+	if (state > RADSENS_HV_GIVEN_UP) {
+		state = RADSENS_HV_GIVEN_UP;
+	}
+	if (attempts > 15U) {
+		attempts = 15U;
+	}
+	twi_slave_set_hv_status((uint8_t)((attempts << 4) | state));
 }
 
 uint8_t radsens_hv_command(void)

@@ -509,6 +509,11 @@ void twi_slave_set_hv_command(uint8_t on)
 	twi_put(TWI_REG_HV_ENABLE, on ? 1U : 0U);
 }
 
+void twi_slave_set_hv_status(uint8_t status)
+{
+	twi_put(TWI_REG_HV_STATUS, status);
+}
+
 void twi_slave_set_led(uint8_t on)
 {
 	twi_put(TWI_REG_LED, on ? 1U : 0U);

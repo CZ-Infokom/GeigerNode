@@ -20,7 +20,9 @@
  * Every reset waits 500 ms, then regulates 380 V at 2400 Hz and publishes
  * RadSens registers. There is no arm word. A host can stop or start that
  * generator and can store a new address and sensitivity. Pulse width stays
- * at or below 100 us. A fault latches PB1 low. During the 500 ms wait the
+ * at or below 100 us. A fault forces PB1 low. An operational fault may
+ * start again after a cooldown; an illegal pulse or rate, or a spent
+ * budget, stays off until a host writes 1. During the 500 ms wait the
  * LED is on. During RUN it flashes on for each GM pulse while the LED
  * register is enabled.
  */

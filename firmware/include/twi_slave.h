@@ -9,10 +9,11 @@
 #define TWI_REG_DEVICE_ID        0x00
 #define TWI_REG_DEVICE_ID_VALUE  0x7D
 #define TWI_REG_FW_VERSION       0x01
-#define TWI_REG_FW_VERSION_VALUE 1U
+#define TWI_REG_FW_VERSION_VALUE 2U
 #define TWI_REG_DYNAMIC_RAD      0x03
 #define TWI_REG_STATIC_RAD       0x06
 #define TWI_REG_PULSE_COUNT      0x09
+#define TWI_REG_HV_STATUS        0x0B
 #define TWI_REG_LP_MODE          0x0C
 #define TWI_REG_ADDRESS          0x10
 #define TWI_REG_HV_ENABLE        0x11
@@ -48,6 +49,7 @@ void twi_slave_clear_pulses(void);
 void twi_slave_set_address(uint8_t address);
 void twi_slave_set_sensitivity(uint16_t sensitivity);
 void twi_slave_set_hv_command(uint8_t on);
+void twi_slave_set_hv_status(uint8_t status);
 void twi_slave_set_led(uint8_t on);
 void twi_slave_set_lp(uint8_t on);
 
