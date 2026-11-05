@@ -12,6 +12,9 @@ firmware/bin/
 *.lss
 *.bin
 
+# Local adversarial-review packets
+.adversarial-review/
+
 # Editor and OS
 .vscode/
 .idea/
