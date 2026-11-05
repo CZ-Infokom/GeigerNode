@@ -1,6 +1,6 @@
 # GeigerNode bring-up
 
-Current step: RadSens mimic, not yet flashed. Address `0x66`, device ID `0x7D`, firmware `0x02`, sensitivity `138` unless EEPROM holds another pair. Static radiation is the last 500 s. Dynamic radiation is an adaptive window of 1..122 s. `0x09` clears on read. A host can write HV on/off, the LED enable, address `0x03`..`0x77`, and sensitivity `0`..`510`. Address and sensitivity are stored at EEPROM 960. `make flash` chip-erases that record. Hardware TWI0 stays off and SCL is never driven. Dose uses the integer sensitivity register. The tube stays installed. Keep 380 V, 2400 Hz, the 100 µs cap, and zero blanking. Every reset holds the LED on for 500 ms, then high voltage. There is no arm word. Stay clear of the HV section when flashing.
+Current step: SBM-20 datasheet factor, flashed and verified 2026-11-05, 8902 bytes. Address `0x66`, device ID `0x7D`, firmware `0x03`, sensitivity `65` (`0x41 0x00`) unless EEPROM holds another pair. Static radiation is the last 500 s. Dynamic radiation is an adaptive window of 1..122 s. `0x09` clears on read. A host can write HV on/off, the LED enable, address `0x03`..`0x77`, and sensitivity `0`..`510`. Address and sensitivity are stored at EEPROM 960. `make flash` chip-erases that record and restores 65. Hardware TWI0 stays off and SCL is never driven. Dose uses the integer sensitivity register: µR/h = CPM * 60 / 65. The fitted tube is an SBM-20. Keep 380 V, 2400 Hz, the 100 µs cap, and zero blanking. Every reset holds the LED on for 500 ms, then high voltage. There is no arm word. Confirm the anode resistor is in series and is at least 1 MΩ before flashing; 5.1 MΩ is the datasheet recommendation. The JNA DR-M3 comparison has not been run. Stay clear of the HV section when flashing.
 
 The sections below are the historical bring-up record. Fuses were written once and are not to be changed.
 
@@ -737,10 +737,10 @@ The only short gap is 156 µs, the same recovery delay as the earlier logs. A st
 These are engineering starting values, not traceable calibrations. Keep the raw
 CPM available and keep the tube coefficient configurable.
 
-For the installed SI-29BG, use `S = 137.5 impulses/µR` as the provisional
+For the previous SI-29BG, `S = 137.5 impulses/µR` was the provisional
 Cs-137 datasheet basepoint. Published limits are 122.5–177.5 impulses/µR
-(550 +160/-60 counts/s at 4 µR/s). The live RadSens register is an integer,
-so the firmware default is 138 and dose uses that register. With the project conversion
+(550 +160/-60 counts/s at 4 µR/s). The RadSens register is a whole number,
+so that tube's register value is 138. It is not the live default. With the project conversion
 `µR/h = CPM * 60 / S`, the nominal factors are:
 
 - `µR/h = CPM * 0.43636`
@@ -754,9 +754,10 @@ the frozen 380 V / 2400 Hz point. The published plateau slope is at most
 in addition to tube spread, source spectrum, geometry, and the board's
 100–200 µs recovery companions. Do not change HV to match the datasheet.
 
-For a future SBM-20 (sometimes mistyped SBN20), use `S = 65 impulses/µR` as a
-rough Cs-137 midpoint. Published Cs-137 response is 240–280 counts/s at
-4 µR/s, equivalent to 60–70 impulses/µR. Its nominal starting factors are:
+The fitted tube is an SBM-20 (sometimes mistyped SBN20). The live default is
+`S = 65 impulses/µR`, the Cs-137 midpoint. Published Cs-137 response is
+240–280 counts/s at 4 µR/s, equivalent to 60–70 impulses/µR. The RadSens-module
+Ra-226 default of 105 is not loaded. The nominal factors are:
 
 - `µR/h = CPM * 0.92308`
 - RadSens raw tenths of µR/h: `raw = CPM * 600 / 65`
@@ -764,9 +765,14 @@ rough Cs-137 midpoint. Published Cs-137 response is 240–280 counts/s at
 
 Published SBM-20 electrical values are 400 V recommended, 350–475 V operating
 range, 190 µs dead time at 400 V, and 5.1 MΩ recommended anode resistance.
-Those values do not authorize a tube swap or a change to this board's frozen
-limits. Review the installed ballast and repeat controlled tube bring-up when
-the SBM-20 arrives.
+The board stays at 380 V and 2400 Hz, inside that operating range, with
+blanking 0. The 400 V recommendation sits on the production abort and was
+not applied. The 190 µs figure is not a software dead time. Confirm the
+anode resistor before the first flash. The JNA DR-M3 comparison has not
+been run. Do not replace 65 from one geometry. Record the source label
+(nuclide, stated rate, distance), a background, and a source window long
+enough to fill the 500 s static register. Keep raw counts from `0x09` as
+well as `0x06`. `S_empirical = net_CPM * 60 / net_µR/h`.
 
 Sources consulted 2026-10-05:
 
@@ -834,9 +840,9 @@ dose-equivalent rate rather than exposure. On 2026-10-05 the user accepted the
 factory datasheet value `S = 137.5 impulses/µR` after the geometries failed to
 converge.
 
-## SI-29BG RadSens I2C
+## RadSens I2C
 
-The live image is the RadSens slave in `i2c-register-map.md`. Default address `0x66`. Device ID `0x00` is `0x7D`. A master write of one byte sets the register pointer. Up to two data bytes after it are applied. The next read, after STOP or a repeated START, starts at that pointer. Bytes inside one read burst increment. Static radiation is `0x06..0x08`, 24-bit big-endian, unit 0.1 µR/h, last 500 s. Dynamic radiation at `0x03..0x05` is the adaptive window under 123 s. Conversion is `µR/h = CPM * 60 / S`, where `S` is the integer at `0x12`. The default is 138. Pulse count at `0x09..0x0A` is 16-bit big-endian and clears when either byte is read. `0x11` starts and stops high voltage. `0x10` and `0x12` are stored across reset until `make flash` erases EEPROM.
+The live image is the SBM-20 RadSens slave in `i2c-register-map.md`. Default address `0x66`. Device ID `0x00` is `0x7D`. The firmware version at `0x01` is `0x03`. A master write of one byte sets the register pointer. Up to two data bytes after it are applied. The next read, after STOP or a repeated START, starts at that pointer. Bytes inside one read burst increment. Static radiation is `0x06..0x08`, 24-bit big-endian, unit 0.1 µR/h, last 500 s. Dynamic radiation at `0x03..0x05` is the adaptive window under 123 s. Conversion is `µR/h = CPM * 60 / S`, where `S` is the integer at `0x12`. The default is 65. Pulse count at `0x09..0x0A` is 16-bit big-endian and clears when either byte is read. `0x11` starts and stops high voltage. `0x10` and `0x12` are stored across reset until `make flash` erases EEPROM.
 
 On 2026-10-05 a host read of `0x00` returned `0x00 0x00`, then `0x3B 0xAA` with the source present, and every other address returned those same two bytes. After the first pointer change every address returned `0x00`. That was the high byte of a leftover dose register. A read without a pointer byte now starts at `0x00`. On 2026-10-07 the Flipper bridge read `0x7D 0x01` from `0x00` and `0x8A 0x00` from `0x12` on the previous image. After the next flash:
 
@@ -849,7 +855,7 @@ i2ctransfer -y <bus> w1@0x66 0x12 r2
 i2ctransfer -y <bus> w1@0x66 0x09 r2
 ```
 
-Expect `0x7d`, then `0x7d 0x02`, then two 24-bit rates, then `0x8a 0x00` unless a host has stored another sensitivity. The `0x09` read returns the pulses since the previous read and clears the counter. A second immediate read of `0x09` is zero if no new edge arrived.
+Expect `0x7d`, then `0x7d 0x03`, then two 24-bit rates, then `0x41 0x00` unless a host has stored another sensitivity. The `0x09` read returns the pulses since the previous read and clears the counter. A second immediate read of `0x09` is zero if no new edge arrived.
 
 `make flash` chip-erases EEPROM because EESAVE is unprogrammed. This image does not run the one-shot GM record. There is no arm word. Every reset, including the programmer reset after flash, holds the LED on for 500 ms and then starts high voltage. Address `0x66` answers during that wait. A stored address or sensitivity does not survive the chip erase.
 
@@ -863,6 +869,6 @@ make verify
 
 Stay clear of the HV section. The LED is on for 500 ms, off while 380 V settles, then off except for a flash on each count. A startup timeout, a settle timeout, or the 400 V abort turns the switch off and retries: four starts, with waits of 30 s, 2 min, and 10 min. During a wait the LED blinks once every 2 s. Four blinks and a pause means give-up; high voltage stays off until a write of `1` to `0x11`. An illegal pulse or rate gives up on the first failure. Do not raise the setpoint.
 
-The 2026-10-05 pass saw address `0x66` and received values. Exact register bytes from that read were not recorded. The 2026-10-07 Flipper pass is the one that returned `0x7D 0x01` and sensitivity `0x8A 0x00`. Background near 9 CPM is about 39 raw counts at S = 138 (3.9 µR/h). Do not treat a live reading as a calibration.
+The 2026-10-05 pass saw address `0x66` and received values. Exact register bytes from that read were not recorded. The 2026-10-07 Flipper pass, on the previous image, returned `0x7D 0x01` and sensitivity `0x8A 0x00`. After the SBM-20 image is flashed, `0x12` is `0x41 0x00` unless EEPROM holds another pair. Background near 9 CPM is about 83 raw counts at S = 65 (8.3 µR/h). Do not treat a live reading as a calibration. The JNA DR-M3 comparison has not been run.
 
 Keep the DMM off the HV output. Do not probe the tube. Do not change fuses. Do not add dead time. Do not raise 380 V or 2400 Hz.

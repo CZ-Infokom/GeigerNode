@@ -4,13 +4,18 @@
 #include <stdint.h>
 
 /*
- * Factory SI-29BG Cs-137 sensitivity is 137.5 impulses/uR. The RadSens
- * register is a whole number, so the published default is 138. Dose math
- * uses the live register, which a host can change for another tube.
- * Pulse counting must not scale by this value.
+ * Sensitivities are impulses/uR. The x10 form keeps a half-count exact.
+ * The RadSens register is a whole number: (x10 + 5) / 10.
+ * SI-29BG Cs-137 is 137.5, so its register value is 138.
+ * The fitted tube is an SBM-20. Its Cs-137 datasheet midpoint is 65,
+ * from 240-280 counts/s at 4 uR/s. Dose math uses the live register,
+ * which a host can change. Pulse counting must not scale by it.
+ * The RadSens-module Ra-226 default of 105 is not used.
  */
 #define RADIATION_SI29BG_SENSITIVITY_X10 1375U
 #define RADIATION_SI29BG_SENSITIVITY_REG 138U
+#define RADIATION_SBM20_SENSITIVITY_X10  650U
+#define RADIATION_SBM20_SENSITIVITY_REG  65U
 #define RADIATION_SENSITIVITY_MAX        510U
 /* Datasheet ceiling: 144000.0 uR/h in units of 0.1 uR/h. */
 #define RADIATION_RADSENS_MAX            1440000UL

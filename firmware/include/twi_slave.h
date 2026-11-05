@@ -9,7 +9,7 @@
 #define TWI_REG_DEVICE_ID        0x00
 #define TWI_REG_DEVICE_ID_VALUE  0x7D
 #define TWI_REG_FW_VERSION       0x01
-#define TWI_REG_FW_VERSION_VALUE 2U
+#define TWI_REG_FW_VERSION_VALUE 3U
 #define TWI_REG_DYNAMIC_RAD      0x03
 #define TWI_REG_STATIC_RAD       0x06
 #define TWI_REG_PULSE_COUNT      0x09

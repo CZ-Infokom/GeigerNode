@@ -1,6 +1,7 @@
 #include <avr/eeprom.h>
 #include <stdint.h>
 
+#include "gm_counter.h"
 #include "radiation.h"
 #include "radsens.h"
 #include "twi_slave.h"
@@ -10,7 +11,7 @@
  * low-power bit do not: the datasheet only names those two as stored.
  * The record sits past the HV series at 0 (178 bytes) and the GM record
  * at 256 (106 bytes). make flash chip-erases EEPROM, which restores
- * address 0x66 and sensitivity 138.
+ * address 0x66 and the active tube sensitivity, 65 for the SBM-20.
  */
 #define RADSENS_NVM_ADDR  960U
 #define RADSENS_NVM_MAGIC 0xA5U
@@ -137,10 +138,10 @@ static void apply_write(const struct twi_write_cmd *cmd)
 void radsens_init(void)
 {
 	struct radsens_nvm nvm;
-	uint16_t loaded = RADIATION_SI29BG_SENSITIVITY_REG;
+	uint16_t loaded = gm_tube_sensitivity_reg();
 
 	device_address = TWI_SLAVE_ADDRESS;
-	sensitivity = RADIATION_SI29BG_SENSITIVITY_REG;
+	sensitivity = loaded;
 	hv_command = 1U;
 	led_enabled = 1U;
 

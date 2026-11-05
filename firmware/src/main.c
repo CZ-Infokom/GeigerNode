@@ -22,7 +22,15 @@
  */
 _Static_assert(F_CPU / 64UL / 125UL == 1000UL, "Timer2 CTC is 1 ms");
 _Static_assert(RADIATION_SI29BG_SENSITIVITY_REG == 138U,
-	       "SI-29BG RadSens register defaults to 138 impulses/uR");
+	       "SI-29BG register value remains 138 impulses/uR");
+_Static_assert(RADIATION_SBM20_SENSITIVITY_REG == 65U,
+	       "SBM-20 Cs-137 datasheet midpoint is 65 impulses/uR");
+_Static_assert(RADIATION_SBM20_SENSITIVITY_X10 ==
+	       RADIATION_SBM20_SENSITIVITY_REG * 10U,
+	       "SBM-20 x10 field is 65.0 impulses/uR");
+_Static_assert((RADIATION_SI29BG_SENSITIVITY_X10 + 5U) / 10U ==
+	       RADIATION_SI29BG_SENSITIVITY_REG,
+	       "SI-29BG register rounds 137.5 to 138");
 _Static_assert(RADIATION_RADSENS_MAX == 1440000UL,
 	       "RadSens intensity saturates at 144000.0 uR/h");
 _Static_assert(TWI_REG_COUNT > TWI_REG_LED, "RadSens map includes 0x14");
@@ -53,7 +61,7 @@ _Static_assert(APP_DYNAMIC_RECENT < APP_DYNAMIC_MAX, "shrink leaves an older sli
 _Static_assert(APP_ATTEMPTS == 4U, "four HV starts before give-up");
 _Static_assert(APP_COOLDOWN_1_MS < APP_COOLDOWN_2_MS, "first cooldown is shortest");
 _Static_assert(APP_COOLDOWN_2_MS < APP_COOLDOWN_3_MS, "cooldowns lengthen");
-_Static_assert(TWI_REG_FW_VERSION_VALUE == 2U, "firmware version is 2");
+_Static_assert(TWI_REG_FW_VERSION_VALUE == 3U, "firmware version is 3");
 _Static_assert(TWI_REG_HV_STATUS == 0x0BU, "HV status is register 0x0B");
 
 #define APP_DELAY    0U
