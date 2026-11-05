@@ -6,9 +6,10 @@
 #include "radiation.h"
 
 /*
- * Tube profile for a later swap to the SBM-20.
- * Sensitivity is stored x10 so 137.5 impulses/uR is exact.
- * Pulse counting must not read it and must not scale counts by it.
+ * Tube profiles. Sensitivity is stored x10 so 137.5 impulses/uR is exact.
+ * gm_tube_active is the fitted tube. The SBM-20 datasheet recommends
+ * 400 V; this board stays at 380 V, inside the 350-475 V range.
+ * Pulse counting must not read a profile and must not scale counts by it.
  */
 struct gm_tube_profile {
 	uint16_t nominal_hv_v;
@@ -16,8 +17,11 @@ struct gm_tube_profile {
 };
 
 #define GM_TUBE_SI29BG_HV_V 380U
+#define GM_TUBE_SBM20_HV_V  380U
 
 extern const struct gm_tube_profile gm_tube_si29bg;
+extern const struct gm_tube_profile gm_tube_sbm20;
+extern const struct gm_tube_profile *const gm_tube_active;
 
 /* Timer2 millisecond tick. The ISR that owns it only increments this. */
 extern volatile uint32_t system_ms;
@@ -53,6 +57,9 @@ struct gm_counter_snapshot {
 
 void gm_counter_init(void);
 uint16_t gm_tube_nominal_hv_v(void);
+
+/* Whole-number impulses/uR from the active profile, rounded to nearest. */
+uint16_t gm_tube_sensitivity_reg(void);
 
 /* Measurement window. Opening clears window counts and interval stats. */
 void gm_counter_open_window(void);

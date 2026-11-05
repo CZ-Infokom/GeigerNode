@@ -28,6 +28,13 @@ const struct gm_tube_profile gm_tube_si29bg __attribute__((used)) = {
 	RADIATION_SI29BG_SENSITIVITY_X10
 };
 
+const struct gm_tube_profile gm_tube_sbm20 = {
+	GM_TUBE_SBM20_HV_V,
+	RADIATION_SBM20_SENSITIVITY_X10
+};
+
+const struct gm_tube_profile *const gm_tube_active = &gm_tube_sbm20;
+
 static volatile uint32_t t0_ovf;
 static volatile uint32_t gm_total_count;
 static volatile uint32_t gm_window_count;
@@ -135,7 +142,12 @@ ISR(INT0_vect)
 
 uint16_t gm_tube_nominal_hv_v(void)
 {
-	return gm_tube_si29bg.nominal_hv_v;
+	return gm_tube_active->nominal_hv_v;
+}
+
+uint16_t gm_tube_sensitivity_reg(void)
+{
+	return (uint16_t)((gm_tube_active->sensitivity_imp_per_ur_x10 + 5U) / 10U);
 }
 
 void gm_counter_init(void)

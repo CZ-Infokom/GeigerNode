@@ -4,7 +4,7 @@
 #include <util/atomic.h>
 
 #include "board.h"
-#include "radiation.h"
+#include "gm_counter.h"
 #include "twi_slave.h"
 
 #define I2C_SDA_MASK _BV(I2C_SDA_BIT)
@@ -38,6 +38,7 @@ static void twi_store_u24(volatile uint8_t *dest, uint32_t value)
 static void twi_fill_bank(volatile uint8_t *dest)
 {
 	uint8_t i;
+	uint16_t sens = gm_tube_sensitivity_reg();
 
 	for (i = 0; i < TWI_REG_COUNT; i++) {
 		dest[i] = 0;
@@ -46,10 +47,8 @@ static void twi_fill_bank(volatile uint8_t *dest)
 	dest[TWI_REG_FW_VERSION] = TWI_REG_FW_VERSION_VALUE;
 	dest[TWI_REG_ADDRESS] = TWI_SLAVE_ADDRESS;
 	dest[TWI_REG_HV_ENABLE] = 1U;
-	dest[TWI_REG_SENSITIVITY] =
-		(uint8_t)(RADIATION_SI29BG_SENSITIVITY_REG & 0xFFU);
-	dest[TWI_REG_SENSITIVITY + 1U] =
-		(uint8_t)(RADIATION_SI29BG_SENSITIVITY_REG >> 8);
+	dest[TWI_REG_SENSITIVITY] = (uint8_t)sens;
+	dest[TWI_REG_SENSITIVITY + 1U] = (uint8_t)(sens >> 8);
 	dest[TWI_REG_LED] = 1U;
 }
 

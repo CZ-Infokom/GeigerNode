@@ -11,7 +11,7 @@ A master write's first data byte is the register pointer. Up to two data bytes a
 | Address | Name | Access | Value |
 | --- | --- | --- | --- |
 | `0x00` | Device ID | read | `0x7D` |
-| `0x01` | Firmware version | read | `0x02` |
+| `0x01` | Firmware version | read | `0x03` |
 | `0x02` | Reserved | read | `0x00` |
 | `0x03`..`0x05` | Dynamic radiation | read | 24-bit big-endian, 0.1 µR/h, adaptive window under 123 s |
 | `0x06`..`0x08` | Static radiation | read | 24-bit big-endian, 0.1 µR/h, last 500 s |
@@ -21,7 +21,7 @@ A master write's first data byte is the register pointer. Up to two data bytes a
 | `0x0D`..`0x0F` | Reserved | read | `0x00` |
 | `0x10` | I2C address | read/write | Default `0x66`. A write of `0x03`..`0x77` is stored and used on the next transaction. `0x76` collides with the BME680 on this board |
 | `0x11` | HV generator | read/write | `1` on, `0` off. Default `1`. Other values are ignored. Give-up forces `0`. A later write of `1` starts a new budget |
-| `0x12`..`0x13` | Sensitivity | read/write | little-endian impulses/µR, range `0`..`510`. Default `138` (`0x8A 0x00`) |
+| `0x12`..`0x13` | Sensitivity | read/write | little-endian impulses/µR, range `0`..`510`. Default `65` (`0x41 0x00`) |
 | `0x14` | LED enable | read/write | `1` flashes on each pulse, `0` stays off. Default `1`. Other values are ignored |
 
 ## Radiation
@@ -39,7 +39,7 @@ The conversion uses the integer in `0x12`:
 register = µR/h * 10
 ```
 
-`S = 0` yields 0. The factory SI-29BG value is 137.5 impulses/µR. The register cannot store the half, so the default is 138. A host write replaces it. One data byte updates that byte. Two data bytes at `0x12` are little-endian. A result above 510 is ignored. Address and sensitivity are saved at EEPROM address 960. `make flash` chip-erases EEPROM and restores `0x66` and 138. HV, the LED enable, and `0x0C` return to their defaults on reset.
+`S = 0` yields 0. The fitted tube is an SBM-20. Reset publishes 65 impulses/µR, the Cs-137 datasheet midpoint. The SI-29BG factory value remains 137.5, and its register value is 138; that is not the live default. A host write replaces the live value. One data byte updates that byte. Two data bytes at `0x12` are little-endian. A result above 510 is ignored. Address and sensitivity are saved at EEPROM address 960. `make flash` chip-erases EEPROM and restores `0x66` and 65. HV, the LED enable, and `0x0C` return to their defaults on reset.
 
 `0x09` is the number of pulses since the previous read of `0x09` or `0x0A`, saturated at 65535. The read clears it. A `0x0A` that follows `0x09` in the same burst is the low byte of that same snapshot. It is not the count inside the radiation windows.
 
@@ -73,4 +73,4 @@ i2ctransfer -y <bus> w1@0x66 0x09 r2
 i2cget -y <bus> 0x66 0x00
 ```
 
-`i2cget` of `0x00` returns `0x7d`. A 21-byte read from `0x00` returns device ID `0x7D`, firmware `0x02`, address `0x66` at `0x10`, and sensitivity `0x8A 0x00`, unless a host has stored another address or sensitivity. `0x0B` is `0x00` until the first HV start.
+`i2cget` of `0x00` returns `0x7d`. A 21-byte read from `0x00` returns device ID `0x7D`, firmware `0x03`, address `0x66` at `0x10`, and sensitivity `0x41 0x00`, unless a host has stored another address or sensitivity. `0x0B` is `0x00` until the first HV start.
