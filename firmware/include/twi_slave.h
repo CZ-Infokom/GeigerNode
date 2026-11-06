@@ -9,7 +9,7 @@
 #define TWI_REG_DEVICE_ID        0x00
 #define TWI_REG_DEVICE_ID_VALUE  0x7D
 #define TWI_REG_FW_VERSION       0x01
-#define TWI_REG_FW_VERSION_VALUE 3U
+#define TWI_REG_FW_VERSION_VALUE 4U
 #define TWI_REG_DYNAMIC_RAD      0x03
 #define TWI_REG_STATIC_RAD       0x06
 #define TWI_REG_PULSE_COUNT      0x09
@@ -30,18 +30,19 @@ struct twi_write_cmd {
 void twi_slave_init(void);
 
 /*
- * Hardware TWI0 stays off. A START on PC4 is polled so the address ACK
- * meets Flipper and Meshtastic, and SCL is never driven. The listen
- * address is a RAM value so a host write to 0x10 can move it.
+ * Hardware TWI0 slave at PC4/PC5. Clock stretching is bounded to one
+ * ISR. A host write to 0x10 updates TWAR0 for the next transaction.
  *
- * Radiation values are 24-bit big-endian, 0.1 uR/h. The pulse counter
- * is not in the published bank: transmitting 0x09 or 0x0A snapshots the
- * live count and clears it. A 0x0A that follows 0x09 in the same burst
- * returns the low byte of that snapshot.
+ * Radiation values are 24-bit big-endian, 0.1 uR/h. A read latches the
+ * published bank so 0x03..0x08 cannot tear. The pulse counter is not in
+ * that bank: transmitting 0x09 or 0x0A snapshots the live count and
+ * clears it. A 0x0A that follows 0x09 in the same burst returns the low
+ * byte of that snapshot.
  *
  * The first data byte of a master write is the register pointer. Up to
  * two following data bytes are captured. Main applies them. A read with
- * no pointer byte starts at 0x00.
+ * no pointer byte starts at 0x00. 0xA0 does not read TWDR0. TWSTO is
+ * written only for a bus error.
  */
 void twi_slave_publish_radiation(uint32_t dynamic_x10, uint32_t static_x10);
 void twi_slave_count_pulses(uint16_t count);

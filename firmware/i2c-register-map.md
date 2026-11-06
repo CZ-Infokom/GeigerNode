@@ -1,6 +1,6 @@
 # GeigerNode I2C register map
 
-Slave address `0x66` until a host changes it. This is the ClimateGuard RadSens map. Hardware TWI0 is off. The slave is bit-banged on PC4 (SDA) and PC5 (SCL) and never drives SCL. It is timed for the Flipper bridge at 100 kHz.
+Slave address `0x66` until a host changes it. This is the ClimateGuard RadSens map. Hardware TWI0 is the slave on PC4 (SDA) and PC5 (SCL). The bit-banged image remains on `fallback/bitbang-i2c`.
 
 A master write's first data byte is the register pointer. Up to two data bytes after that are applied. Further bytes in that write are acknowledged and ignored. A pointer of `0x15` or higher is stored as `0x00`. A read with no pointer byte starts at `0x00`. Bytes inside one read increment. After `0x14`, further bytes in that burst are `0xFF`.
 
@@ -11,7 +11,7 @@ A master write's first data byte is the register pointer. Up to two data bytes a
 | Address | Name | Access | Value |
 | --- | --- | --- | --- |
 | `0x00` | Device ID | read | `0x7D` |
-| `0x01` | Firmware version | read | `0x03` |
+| `0x01` | Firmware version | read | `0x04` |
 | `0x02` | Reserved | read | `0x00` |
 | `0x03`..`0x05` | Dynamic radiation | read | 24-bit big-endian, 0.1 µR/h, adaptive window under 123 s |
 | `0x06`..`0x08` | Static radiation | read | 24-bit big-endian, 0.1 µR/h, last 500 s |
@@ -53,6 +53,17 @@ A startup timeout, a settle timeout, or the 400 V abort drops the switch and ret
 
 ## Reads
 
+ESP32-C3 serial bridge (`/mnt/Work/dev/PlatformIO/Projects/I2C_bridge`), 115200 baud:
+
+```text
+s
+r 66 00 2
+r 66 06 3
+r 66 09 2
+r 66 00 21
+r 76 D0 1
+```
+
 Flipper I2C bridge, with the app running:
 
 ```text
@@ -73,4 +84,4 @@ i2ctransfer -y <bus> w1@0x66 0x09 r2
 i2cget -y <bus> 0x66 0x00
 ```
 
-`i2cget` of `0x00` returns `0x7d`. A 21-byte read from `0x00` returns device ID `0x7D`, firmware `0x03`, address `0x66` at `0x10`, and sensitivity `0x41 0x00`, unless a host has stored another address or sensitivity. `0x0B` is `0x00` until the first HV start.
+`i2cget` of `0x00` returns `0x7d`. A 21-byte read from `0x00` returns device ID `0x7D`, firmware `0x04`, address `0x66` at `0x10`, and sensitivity `0x41 0x00`, unless a host has stored another address or sensitivity. `0x0B` is `0x00` until the first HV start.

@@ -61,7 +61,7 @@ _Static_assert(APP_DYNAMIC_RECENT < APP_DYNAMIC_MAX, "shrink leaves an older sli
 _Static_assert(APP_ATTEMPTS == 4U, "four HV starts before give-up");
 _Static_assert(APP_COOLDOWN_1_MS < APP_COOLDOWN_2_MS, "first cooldown is shortest");
 _Static_assert(APP_COOLDOWN_2_MS < APP_COOLDOWN_3_MS, "cooldowns lengthen");
-_Static_assert(TWI_REG_FW_VERSION_VALUE == 3U, "firmware version is 3");
+_Static_assert(TWI_REG_FW_VERSION_VALUE == 4U, "firmware version is 4");
 _Static_assert(TWI_REG_HV_STATUS == 0x0BU, "HV status is register 0x0B");
 
 #define APP_DELAY    0U

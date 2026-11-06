@@ -10,7 +10,10 @@
 # Board 01 measured 500 Hz on PD7 with this image, so the CPU clock is 8 MHz.
 # The default matches that clock.
 
-TOOLCHAIN := /opt/avr8-gnu-toolchain-4.0.0
+TOOLCHAIN ?= /opt/avr8-gnu-toolchain-4.0.0
+ifeq ($(wildcard $(TOOLCHAIN)/bin/avr-gcc),)
+TOOLCHAIN := /opt/avr-gcc-15.2.0
+endif
 
 TARGET := geigernode
 MCU := atmega328pb
@@ -21,9 +24,13 @@ OBJCOPY := $(TOOLCHAIN)/bin/avr-objcopy
 OBJDUMP := $(TOOLCHAIN)/bin/avr-objdump
 SIZE := $(TOOLCHAIN)/bin/avr-size
 AVRDUDE := avrdude
+AVRDUDE_CONF ?= /etc/avrdude.conf
 
-PROGRAMMER := atmelice_isp
-PORT := usb
+# Flipper AVR Flasher speaks STK500v1 on CDC if02. CLI is if00; do not use it.
+# Atmel-ICE: make PROGRAMMER=atmelice_isp PORT=usb
+PROGRAMMER ?= stk500v1
+PORT ?= $(firstword $(wildcard /dev/serial/by-id/usb-Flipper_Devices_Inc.*-if02))
+AVRDUDE_BAUD ?= 115200
 
 F_CPU ?= 8000000UL
 
@@ -42,7 +49,15 @@ CFLAGS := \
 
 LDFLAGS := -mmcu=$(MCU) -Wl,--gc-sections
 
-AVRDUDE_FLAGS := -p $(AVRDUDE_MCU) -c $(PROGRAMMER) -P $(PORT)
+AVRDUDE_FLAGS := -C $(AVRDUDE_CONF) -p $(AVRDUDE_MCU) -c $(PROGRAMMER) -P $(PORT)
+ifeq ($(PROGRAMMER),stk500v1)
+AVRDUDE_FLAGS += -b $(AVRDUDE_BAUD)
+endif
+ifneq ($(filter flash flash-twi-hw-test verify verify-twi-hw-test read-signature read-fuses fuses read-hv-test read-freq-series arm-freq-series read-gm-test arm-gm-test,$(MAKECMDGOALS)),)
+ifeq ($(PORT),)
+$(error No Flipper ISP port. Start AVR Flasher USB ISP, or set PORT= and PROGRAMMER=)
+endif
+endif
 
 BIN := bin
 
@@ -55,9 +70,36 @@ ELF := $(BIN)/$(TARGET).elf
 HEX := $(BIN)/$(TARGET).hex
 LST := $(BIN)/$(TARGET).lst
 
-.PHONY: all clean size flash verify read-signature read-fuses toolchain-info disasm fuses read-hv-test read-freq-series arm-freq-series read-gm-test arm-gm-test
+.PHONY: all clean size flash verify read-signature read-fuses toolchain-info disasm fuses read-hv-test read-freq-series arm-freq-series read-gm-test arm-gm-test twi-hw-test flash-twi-hw-test verify-twi-hw-test
 
 all: $(HEX) size
+
+# Hardware TWI0 proof of concept (issue #3). Separate image: HV off, fixed
+# registers at 0x66. Does not replace the production bit-banged slave.
+TWI_HW_TEST_SRC := src/twi_hw_test.c
+TWI_HW_TEST_OBJ := $(BIN)/twi_hw_test.o
+TWI_HW_TEST_ELF := $(BIN)/twi-hw-test.elf
+TWI_HW_TEST_HEX := $(BIN)/twi-hw-test.hex
+
+twi-hw-test: $(TWI_HW_TEST_HEX)
+	$(SIZE) --format=berkeley $(TWI_HW_TEST_ELF)
+
+$(TWI_HW_TEST_OBJ): $(TWI_HW_TEST_SRC) include/board.h | $(BIN)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(TWI_HW_TEST_ELF): $(TWI_HW_TEST_OBJ) | $(BIN)
+	$(CC) $(LDFLAGS) -o $@ $(TWI_HW_TEST_OBJ)
+
+$(TWI_HW_TEST_HEX): $(TWI_HW_TEST_ELF)
+	$(OBJCOPY) -O ihex -R .eeprom $< $@
+
+# Flash only. Does not read or write fuses. Chip-erases EEPROM (HFUSE 0xD9).
+flash-twi-hw-test: $(TWI_HW_TEST_HEX)
+	$(AVRDUDE) $(AVRDUDE_FLAGS) -U flash:w:$(TWI_HW_TEST_HEX):i
+
+verify-twi-hw-test: $(TWI_HW_TEST_HEX)
+	$(AVRDUDE) $(AVRDUDE_FLAGS) -U flash:v:$(TWI_HW_TEST_HEX):i
+
 
 $(BIN):
 	mkdir -p $@

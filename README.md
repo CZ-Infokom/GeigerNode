@@ -8,7 +8,8 @@ This board generates about 400 V. Stay clear of the HV section when the LED is o
 
 - Tube: SBM-20
 - Sensitivity default: 65 impulses/µR (`0x41 0x00` at register `0x12`)
-- Firmware byte `0x01`: `0x03`
+- Firmware byte `0x01`: `0x04`
+- I2C: hardware TWI0. Bit-bang fallback is `fallback/bitbang-i2c`.
 - Operating point: 380 V at 2400 Hz, 100 µs pulse cap, production abort around 400 V
 - Blanking: 0. Pulse counting does not scale by S.
 - Host: Meshtastic / Flipper / any RadSens master
