@@ -12,6 +12,9 @@ firmware/bin/
 *.lss
 *.bin
 
+# Release images for the Flipper AVR Flasher file browser
+!firmware/flipper/*.hex
+
 # Local adversarial-review packets
 .adversarial-review/
 

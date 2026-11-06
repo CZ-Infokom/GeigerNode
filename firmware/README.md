@@ -46,6 +46,8 @@ make PROTOCOL=native verify
 
 `make flash` and `make verify` program flash only. `make read-fuses` only reads LFUSE, HFUSE, and EFUSE. After `make flash` the programmer reset turns the LED on for 500 ms, then high voltage starts. Stay clear of the HV section. The chip erase wipes EEPROM. Native v1 does not load an I2C address from EEPROM. The RadSens image restores address `0x66` and sensitivity 65.
 
+Standalone copies of the same flash images are `flipper/geigernode-native.hex` (8982 bytes) and `flipper/geigernode-radsens.hex` (9048 bytes). Copy one `.hex` file to the Flipper SD card and choose it in AVR Flasher's Flash AVR browser. Those files contain flash records only: no EEPROM, fuse, or lock data. Do not write fuses. A Flash AVR programming chip-erases EEPROM, then the reset starts 380 V. Details are in `flipper/README.md`.
+
 ```sh
 make fuses
 ```

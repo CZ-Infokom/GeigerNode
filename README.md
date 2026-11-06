@@ -21,6 +21,7 @@ The JNA DR-M3 comparison has not been run. Do not replace 65 until that measurem
 | Path | What it is |
 | --- | --- |
 | [`firmware/`](firmware/) | AVR sources, Makefile, and flash targets |
+| [`firmware/flipper/`](firmware/flipper/) | Flash-only Intel HEX images for the Flipper AVR Flasher |
 | [`hardware/`](hardware/) | KiCad 10 rev A board. `hardware/production/` is the 2026-09-17 fab export |
 | [`firmware/geigernode-i2c-protocol.md`](firmware/geigernode-i2c-protocol.md) | Native I2C protocol v1 |
 | [`firmware/i2c-register-map.md`](firmware/i2c-register-map.md) | RadSens register map |
