@@ -34,6 +34,24 @@ AVRDUDE_BAUD ?= 115200
 
 F_CPU ?= 8000000UL
 
+# Choose the I2C map at compile time: PROTOCOL=native (0x67) or
+# PROTOCOL=radsens (0x66). math-test, clean, and toolchain-info do not
+# need it.
+NEED_PROTOCOL := 1
+ifneq ($(MAKECMDGOALS),)
+ifeq ($(filter-out math-test clean toolchain-info,$(MAKECMDGOALS)),)
+NEED_PROTOCOL :=
+endif
+endif
+ifdef NEED_PROTOCOL
+ifndef PROTOCOL
+$(error Set PROTOCOL=native (0x67) or PROTOCOL=radsens (0x66))
+endif
+ifeq ($(filter $(PROTOCOL),native radsens),)
+$(error PROTOCOL must be native or radsens)
+endif
+endif
+
 CFLAGS := \
 	-mmcu=$(MCU) \
 	-DF_CPU=$(F_CPU) \
@@ -47,6 +65,10 @@ CFLAGS := \
 	-fdata-sections \
 	-Iinclude
 
+ifeq ($(PROTOCOL),native)
+CFLAGS += -DGEIGERNODE_PROTOCOL_NATIVE
+endif
+
 LDFLAGS := -mmcu=$(MCU) -Wl,--gc-sections
 
 AVRDUDE_FLAGS := -C $(AVRDUDE_CONF) -p $(AVRDUDE_MCU) -c $(PROGRAMMER) -P $(PORT)
@@ -59,7 +81,11 @@ $(error No Flipper ISP port. Start AVR Flasher USB ISP, or set PORT= and PROGRAM
 endif
 endif
 
-BIN := bin
+ifdef PROTOCOL
+BIN := bin/$(PROTOCOL)
+else
+BIN := bin/host
+endif
 
 # One-shot GM EEPROM test stays in the tree and is not linked.
 SRC := src/main.c src/gpio.c src/gm_counter.c src/adc.c src/hv.c \
@@ -70,9 +96,19 @@ ELF := $(BIN)/$(TARGET).elf
 HEX := $(BIN)/$(TARGET).hex
 LST := $(BIN)/$(TARGET).lst
 
-.PHONY: all clean size flash verify read-signature read-fuses toolchain-info disasm fuses read-hv-test read-freq-series arm-freq-series read-gm-test arm-gm-test twi-hw-test flash-twi-hw-test verify-twi-hw-test
+.PHONY: all clean size flash verify read-signature read-fuses toolchain-info disasm fuses read-hv-test read-freq-series arm-freq-series read-gm-test arm-gm-test twi-hw-test flash-twi-hw-test verify-twi-hw-test math-test
 
 all: $(HEX) size
+
+HOSTCC ?= gcc
+MATH_TEST := $(BIN)/radiation_math_test
+
+math-test: $(MATH_TEST)
+	$(MATH_TEST)
+
+$(MATH_TEST): host/radiation_math_test.c src/radiation.c include/radiation.h | $(BIN)
+	$(HOSTCC) -std=c11 -Wall -Wextra -Wshadow -Iinclude -o $@ \
+		host/radiation_math_test.c src/radiation.c
 
 # Hardware TWI0 proof of concept (issue #3). Separate image: HV off, fixed
 # registers at 0x66. Does not replace the production bit-banged slave.
@@ -107,7 +143,7 @@ $(BIN):
 $(ELF): $(OBJ) | $(BIN)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ)
 
-$(BIN)/%.o: src/%.c include/board.h include/gpio.h include/gm_counter.h include/gm_test.h include/adc.h include/twi_slave.h include/radsens.h include/radiation.h include/hv.h | $(BIN)
+$(BIN)/%.o: src/%.c include/board.h include/gpio.h include/gm_counter.h include/gm_test.h include/adc.h include/twi_slave.h include/radsens.h include/radiation.h include/hv.h include/gn_protocol.h | $(BIN)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(HEX): $(ELF)
@@ -207,4 +243,4 @@ arm-gm-test:
 	$(AVRDUDE) $(AVRDUDE_FLAGS) -t < $(BIN)/arm-gm-cmds.txt
 
 clean:
-	rm -rf $(BIN)
+	rm -rf bin

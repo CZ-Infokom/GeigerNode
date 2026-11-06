@@ -1,6 +1,6 @@
 # GeigerNode bring-up
 
-Current step: hardware TWI0 RadSens slave on `feature/hw-twi0-poc`, flashed and verified 2026-11-06, 8724 bytes, firmware `0x04`. ESP32-C3 reads `7D 04` and BME680 `0x61`. Bit-bang fallback is `fallback/bitbang-i2c`. After `make flash` the LED is on for 500 ms, then 380 V starts. Stay clear of the HV section.
+Current step: native I2C protocol v1 and RadSens share `dev`. Choose the map at compile time: `make PROTOCOL=native` is `0x67`; `make PROTOCOL=radsens` is `0x66`. Bit-bang fallback is `fallback/bitbang-i2c`. After `make PROTOCOL=native flash` the LED is on for 500 ms, then 380 V starts. Stay clear of the HV section.
 
 The sections below are the historical bring-up record. Fuses were written once and are not to be changed.
 

@@ -1,11 +1,14 @@
-#include <avr/eeprom.h>
 #include <stdint.h>
 
+#ifndef GEIGERNODE_PROTOCOL_NATIVE
+#include <avr/eeprom.h>
 #include "gm_counter.h"
+#endif
 #include "radiation.h"
 #include "radsens.h"
 #include "twi_slave.h"
 
+#ifndef GEIGERNODE_PROTOCOL_NATIVE
 /*
  * Address and sensitivity survive reset. HV, the LED enable, and the
  * low-power bit do not: the datasheet only names those two as stored.
@@ -32,8 +35,11 @@ _Static_assert(RADSENS_NVM_ADDR + sizeof(struct radsens_nvm) <= 1024U,
 
 static uint8_t device_address;
 static uint16_t sensitivity;
+#endif
 static uint8_t hv_command;
 static uint8_t led_enabled;
+
+#ifndef GEIGERNODE_PROTOCOL_NATIVE
 
 static uint8_t nvm_sum(const struct radsens_nvm *nvm)
 {
@@ -135,8 +141,14 @@ static void apply_write(const struct twi_write_cmd *cmd)
 	}
 }
 
+#endif
+
 void radsens_init(void)
 {
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+	hv_command = 1U;
+	led_enabled = 1U;
+#else
 	struct radsens_nvm nvm;
 	uint16_t loaded = gm_tube_sensitivity_reg();
 
@@ -157,6 +169,7 @@ void radsens_init(void)
 	twi_slave_set_led(led_enabled);
 	twi_slave_set_lp(0);
 	radsens_publish_radiation(0, 0);
+#endif
 }
 
 void radsens_poll(void)
@@ -164,21 +177,30 @@ void radsens_poll(void)
 	struct twi_write_cmd cmd;
 
 	while (twi_slave_take_write(&cmd)) {
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+		(void)cmd;
+#else
 		apply_write(&cmd);
+#endif
 	}
 }
 
+#ifndef GEIGERNODE_PROTOCOL_NATIVE
 void radsens_publish_radiation(uint32_t dynamic_x10, uint32_t static_x10)
 {
 	twi_slave_publish_radiation(dynamic_x10, static_x10);
 }
+#endif
 
 void radsens_on_fault(void)
 {
 	hv_command = 0U;
+#ifndef GEIGERNODE_PROTOCOL_NATIVE
 	twi_slave_set_hv_command(0);
+#endif
 }
 
+#ifndef GEIGERNODE_PROTOCOL_NATIVE
 void radsens_set_hv_status(uint8_t state, uint8_t attempts)
 {
 	if (state > RADSENS_HV_GIVEN_UP) {
@@ -189,6 +211,7 @@ void radsens_set_hv_status(uint8_t state, uint8_t attempts)
 	}
 	twi_slave_set_hv_status((uint8_t)((attempts << 4) | state));
 }
+#endif
 
 uint8_t radsens_hv_command(void)
 {
@@ -200,7 +223,9 @@ uint8_t radsens_led_enabled(void)
 	return led_enabled;
 }
 
+#ifndef GEIGERNODE_PROTOCOL_NATIVE
 uint16_t radsens_sensitivity(void)
 {
 	return sensitivity;
 }
+#endif
