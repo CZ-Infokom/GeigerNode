@@ -12,19 +12,20 @@
  * GM_PULSE is PD2 / INT0, active low, falling edge. The pin is an input with a pull-up.
  * PD3 is spare and stays untouched.
  * HV_ADC is PC0 / ADC0. The default image leaves the converter off while it is read.
- * I2C slave address is 0x66. SDA is PC4 and SCL is PC5. Hardware TWI0
- * is the slave. Pin-change bit-bang is off. The bit-banged image is on
+ * I2C SDA is PC4 and SCL is PC5. Hardware TWI0 is the slave.
+ * PROTOCOL=native answers at 0x67. PROTOCOL=radsens answers at 0x66.
+ * Pin-change bit-bang is off. The bit-banged image is on
  * branch fallback/bitbang-i2c.
  * Timer2 is the millisecond tick. Its pin outputs stay disconnected.
  * Timer1 is the HV pulse. Its hard maximum width is 100 us.
- * Every reset waits 500 ms, then regulates 380 V at 2400 Hz and publishes
- * RadSens registers. There is no arm word. A host can stop or start that
- * generator and can store a new address and sensitivity. Pulse width stays
- * at or below 100 us. A fault forces PB1 low. An operational fault may
- * start again after a cooldown; an illegal pulse or rate, or a spent
- * budget, stays off until a host writes 1. During the 500 ms wait the
- * LED is on. During RUN it flashes on for each GM pulse while the LED
- * register is enabled.
+ * Every reset waits 500 ms, then regulates 380 V at 2400 Hz. There is
+ * no arm word. The native map is read-only. A RadSens host can stop or
+ * start the generator and can store a new address and sensitivity.
+ * Pulse width stays at or below 100 us. A fault forces PB1 low. An
+ * operational fault may start again after a cooldown; an illegal pulse
+ * or rate, or a spent budget, stays off until a RadSens host writes 1
+ * or the native image is reset. During the 500 ms wait the LED is on.
+ * During RUN it flashes on for each GM pulse.
  */
 
 #define HV_SW_PORT     PORTB

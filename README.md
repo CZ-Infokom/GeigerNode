@@ -1,18 +1,18 @@
 # GeigerNode
 
-Bare-metal firmware for the GeigerNode PCB: an ATmega328PB that runs an SBM-20 Geiger tube and answers as a ClimateGuard RadSens I2C slave at `0x66`.
+Bare-metal firmware for the GeigerNode PCB: an ATmega328PB that runs an SBM-20 Geiger tube. The I2C map is chosen at compile time: `make PROTOCOL=native` is protocol v1 at `0x67`; `make PROTOCOL=radsens` is the ClimateGuard RadSens slave at `0x66`.
 
 This board generates about 400 V. Stay clear of the HV section when the LED is on after reset, and after `make flash`. The programmer reset holds the LED on for 500 ms, then 380 V starts.
 
 ## Current image
 
 - Tube: SBM-20
-- Sensitivity default: 65 impulses/µR (`0x41 0x00` at register `0x12`)
-- Firmware byte `0x01`: `0x04`
+- Native protocol v1 at `0x67`: device ID `0x474E`, CPM × 10 and nSv/h from a 500 s window. Calibration Q16.16 `604948` (65 impulses/µR as nSv/h per CPM)
+- RadSens image at `0x66`: firmware byte `0x01` is `0x04`, sensitivity default 65 impulses/µR
 - I2C: hardware TWI0. Bit-bang fallback is `fallback/bitbang-i2c`.
 - Operating point: 380 V at 2400 Hz, 100 µs pulse cap, production abort around 400 V
 - Blanking: 0. Pulse counting does not scale by S.
-- Host: Meshtastic / Flipper / any RadSens master
+- Host: Meshtastic reads native `0x04`..`0x0B`. RadSens masters need `PROTOCOL=radsens`.
 
 The JNA DR-M3 comparison has not been run. Do not replace 65 until that measurement is accepted.
 
@@ -21,6 +21,7 @@ The JNA DR-M3 comparison has not been run. Do not replace 65 until that measurem
 | Path | What it is |
 | --- | --- |
 | [`firmware/`](firmware/) | AVR sources, Makefile, and flash targets |
+| [`firmware/geigernode-i2c-protocol.md`](firmware/geigernode-i2c-protocol.md) | Native I2C protocol v1 |
 | [`firmware/i2c-register-map.md`](firmware/i2c-register-map.md) | RadSens register map |
 | [`firmware/bringup/README.md`](firmware/bringup/README.md) | Bring-up log and host toolchain |
 | [`GeigerNode Firmware Development.md`](GeigerNode%20Firmware%20Development.md) | Development plan and PROJECT STATUS |
@@ -30,12 +31,12 @@ The JNA DR-M3 comparison has not been run. Do not replace 65 until that measurem
 From `firmware/`:
 
 ```sh
-make
-make flash
-make verify
+make PROTOCOL=native
+make PROTOCOL=native flash
+make PROTOCOL=native verify
 ```
 
-The board is externally powered. Atmel-ICE does not power the target. `make flash` programs flash only and chip-erases EEPROM, which restores address `0x66` and sensitivity 65. Do not write fuses unless a human has approved the bytes. Details are in [`firmware/README.md`](firmware/README.md).
+The board is externally powered. Atmel-ICE does not power the target. `make flash` programs flash only and chip-erases EEPROM. Do not write fuses unless a human has approved the bytes. Details are in [`firmware/README.md`](firmware/README.md).
 
 ## Branches
 

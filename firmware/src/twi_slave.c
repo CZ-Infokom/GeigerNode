@@ -5,7 +5,10 @@
 #include <util/twi.h>
 
 #include "board.h"
+#ifndef GEIGERNODE_PROTOCOL_NATIVE
 #include "gm_counter.h"
+#endif
+#include "radiation.h"
 #include "twi_slave.h"
 
 #define TWI_CR_ACK \
@@ -20,9 +23,11 @@ static volatile uint8_t addr_ptr;
 static uint8_t send_ptr;
 static uint8_t expect_pointer;
 static uint8_t have_new_pointer;
+#ifndef GEIGERNODE_PROTOCOL_NATIVE
 static volatile uint16_t pulse_since_read;
 static uint8_t pulse_latch_lo;
 static uint8_t pulse_latch_valid;
+#endif
 static uint8_t twi_write_ptr;
 static uint8_t twi_write_len;
 static uint8_t twi_write_data[2];
@@ -30,6 +35,37 @@ static volatile uint8_t twi_cmd_ptr;
 static volatile uint8_t twi_cmd_len;
 static volatile uint8_t twi_cmd_data[2];
 static volatile uint8_t twi_cmd_ready;
+
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+
+static void twi_store_u16(volatile uint8_t *dest, uint16_t value)
+{
+	dest[0] = (uint8_t)(value >> 8);
+	dest[1] = (uint8_t)value;
+}
+
+static void twi_store_u32(volatile uint8_t *dest, uint32_t value)
+{
+	dest[0] = (uint8_t)(value >> 24);
+	dest[1] = (uint8_t)(value >> 16);
+	dest[2] = (uint8_t)(value >> 8);
+	dest[3] = (uint8_t)value;
+}
+
+static void twi_fill_bank(volatile uint8_t *dest)
+{
+	uint8_t i;
+
+	for (i = 0; i < TWI_REG_COUNT; i++) {
+		dest[i] = 0;
+	}
+	twi_store_u16(&dest[GN_REG_DEVICE_ID], GN_DEVICE_ID);
+	dest[GN_REG_PROTOCOL] = GN_PROTOCOL_VERSION;
+	dest[GN_REG_CAPS] = GN_CAPS_VALUE;
+	twi_store_u32(&dest[GN_REG_CAL], RADIATION_SBM20_NSVH_PER_CPM_Q16);
+}
+
+#else
 
 static void twi_store_u24(volatile uint8_t *dest, uint32_t value)
 {
@@ -56,6 +92,9 @@ static void twi_fill_bank(volatile uint8_t *dest)
 	dest[TWI_REG_LED] = 1U;
 }
 
+#endif
+
+#ifndef GEIGERNODE_PROTOCOL_NATIVE
 static void twi_put(uint8_t reg, uint8_t value)
 {
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
@@ -63,6 +102,7 @@ static void twi_put(uint8_t reg, uint8_t value)
 		regs[1][reg] = value;
 	}
 }
+#endif
 
 static void twi_accept_pointer(uint8_t value)
 {
@@ -85,6 +125,8 @@ static void twi_latch(void)
 		txn[i] = src[i];
 	}
 }
+
+#ifndef GEIGERNODE_PROTOCOL_NATIVE
 
 static uint8_t twi_pulse_hi(void)
 {
@@ -110,16 +152,20 @@ static uint8_t twi_pulse_lo(void)
 	return value;
 }
 
+#endif
+
 static void twi_send_byte(void)
 {
 	uint8_t byte;
 
 	if (send_ptr >= TWI_REG_COUNT) {
 		byte = 0xFFU;
+#ifndef GEIGERNODE_PROTOCOL_NATIVE
 	} else if (send_ptr == TWI_REG_PULSE_COUNT) {
 		byte = twi_pulse_hi();
 	} else if (send_ptr == (uint8_t)(TWI_REG_PULSE_COUNT + 1U)) {
 		byte = twi_pulse_lo();
+#endif
 	} else {
 		byte = txn[send_ptr];
 	}
@@ -152,7 +198,9 @@ ISR(TWI0_vect)
 	case TW_SR_ARB_LOST_SLA_ACK: /* 0x68 */
 		expect_pointer = 1;
 		twi_write_len = 0;
+#ifndef GEIGERNODE_PROTOCOL_NATIVE
 		pulse_latch_valid = 0;
+#endif
 		TWCR0 = TWI_CR_ACK;
 		break;
 
@@ -219,9 +267,11 @@ void twi_slave_init(void)
 	send_ptr = 0;
 	expect_pointer = 0;
 	have_new_pointer = 0;
+#ifndef GEIGERNODE_PROTOCOL_NATIVE
 	pulse_since_read = 0;
 	pulse_latch_lo = 0;
 	pulse_latch_valid = 0;
+#endif
 	twi_write_ptr = 0;
 	twi_write_len = 0;
 	twi_write_data[0] = 0;
@@ -250,6 +300,47 @@ void twi_slave_init(void)
 	TWAMR0 = 0;
 	TWCR0 = TWI_CR_ACK;
 }
+
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+
+void twi_slave_publish_native(uint32_t dose_nsvh, uint32_t cpm_x10,
+			      uint16_t status, uint32_t sequence,
+			      uint32_t cal_q16, uint32_t count,
+			      uint32_t elapsed_ms)
+{
+	uint8_t bank;
+	volatile uint8_t *dest;
+	uint8_t i;
+
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+		bank = (uint8_t)((regs_pub == regs[1]) ? 0U : 1U);
+		dest = regs[bank];
+		for (i = 0; i < TWI_REG_COUNT; i++) {
+			dest[i] = regs_pub[i];
+		}
+		twi_store_u16(&dest[GN_REG_DEVICE_ID], GN_DEVICE_ID);
+		dest[GN_REG_PROTOCOL] = GN_PROTOCOL_VERSION;
+		dest[GN_REG_CAPS] = GN_CAPS_VALUE;
+		twi_store_u32(&dest[GN_REG_DOSE], dose_nsvh);
+		twi_store_u32(&dest[GN_REG_CPM_X10], cpm_x10);
+		twi_store_u16(&dest[GN_REG_STATUS], status);
+		twi_store_u32(&dest[GN_REG_SEQUENCE], sequence);
+		twi_store_u32(&dest[GN_REG_CAL], cal_q16);
+		twi_store_u32(&dest[GN_REG_COUNT], count);
+		twi_store_u32(&dest[GN_REG_ELAPSED], elapsed_ms);
+		regs_pub = dest;
+	}
+}
+
+void twi_slave_set_native_status(uint16_t status)
+{
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+		twi_store_u16(&regs[0][GN_REG_STATUS], status);
+		twi_store_u16(&regs[1][GN_REG_STATUS], status);
+	}
+}
+
+#else
 
 void twi_slave_publish_radiation(uint32_t dynamic_x10, uint32_t static_x10)
 {
@@ -329,6 +420,8 @@ void twi_slave_set_lp(uint8_t on)
 {
 	twi_put(TWI_REG_LP_MODE, on ? 1U : 0U);
 }
+
+#endif
 
 uint8_t twi_slave_take_write(struct twi_write_cmd *out)
 {

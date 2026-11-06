@@ -17,7 +17,7 @@
 
 /*
  * Timer2 CTC, prescaler 64, OCR2A 124. 8000000 / (64 * 125) = 1000 Hz.
- * The tick ISR only counts. INT0 owns the GM edges. The bit-bang slave
+ * The tick ISR only counts. INT0 owns the GM edges. Hardware TWI0
  * owns the bus. Main owns HV, dose conversion, and the LED.
  */
 _Static_assert(F_CPU / 64UL / 125UL == 1000UL, "Timer2 CTC is 1 ms");
@@ -33,7 +33,15 @@ _Static_assert((RADIATION_SI29BG_SENSITIVITY_X10 + 5U) / 10U ==
 	       "SI-29BG register rounds 137.5 to 138");
 _Static_assert(RADIATION_RADSENS_MAX == 1440000UL,
 	       "RadSens intensity saturates at 144000.0 uR/h");
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+_Static_assert(TWI_SLAVE_ADDRESS == 0x67U, "native address is 0x67");
+_Static_assert(TWI_REG_COUNT == 0x1EU, "native map is 30 bytes");
+_Static_assert(GN_PROTOCOL_VERSION == 1U, "protocol version is 1");
+_Static_assert(RADIATION_SBM20_NSVH_PER_CPM_Q16 == 604948UL,
+	       "SBM-20 Q16.16 is round(600/65*65536)");
+#else
 _Static_assert(TWI_REG_COUNT > TWI_REG_LED, "RadSens map includes 0x14");
+#endif
 
 #define APP_PRE_HV_MS       500UL
 #define APP_PUBLISH_MS      1000UL
@@ -61,8 +69,10 @@ _Static_assert(APP_DYNAMIC_RECENT < APP_DYNAMIC_MAX, "shrink leaves an older sli
 _Static_assert(APP_ATTEMPTS == 4U, "four HV starts before give-up");
 _Static_assert(APP_COOLDOWN_1_MS < APP_COOLDOWN_2_MS, "first cooldown is shortest");
 _Static_assert(APP_COOLDOWN_2_MS < APP_COOLDOWN_3_MS, "cooldowns lengthen");
+#ifndef GEIGERNODE_PROTOCOL_NATIVE
 _Static_assert(TWI_REG_FW_VERSION_VALUE == 4U, "firmware version is 4");
 _Static_assert(TWI_REG_HV_STATUS == 0x0BU, "HV status is register 0x0B");
+#endif
 
 #define APP_DELAY    0U
 #define APP_SETTLE   1U
@@ -72,11 +82,23 @@ _Static_assert(TWI_REG_HV_STATUS == 0x0BU, "HV status is register 0x0B");
 #define APP_COOLDOWN 5U
 
 static uint16_t cps_buckets[APP_STATIC_S];
+static uint8_t cps_extra[APP_STATIC_S];
 static uint16_t cps_pos;
 static uint16_t cps_len;
 static uint32_t stat_sum;
+static uint32_t stat_elapsed_ms;
 static uint32_t dyn_sum;
 static uint8_t dyn_len;
+
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+static uint8_t snap_valid;
+static uint8_t snap_full;
+static uint8_t snap_overflow;
+static uint8_t snap_app;
+static uint8_t snap_attempts;
+static uint8_t run_has_sample;
+static uint32_t snap_seq;
+#endif
 
 volatile uint32_t system_ms;
 
@@ -167,10 +189,12 @@ static void windows_clear(void)
 
 	for (i = 0; i < APP_STATIC_S; i++) {
 		cps_buckets[i] = 0;
+		cps_extra[i] = 0;
 	}
 	cps_pos = 0;
 	cps_len = 0;
 	stat_sum = 0;
+	stat_elapsed_ms = 0;
 	dyn_sum = 0;
 	dyn_len = 0;
 }
@@ -194,7 +218,7 @@ static uint32_t sum_recent(uint16_t count)
 	return sum;
 }
 
-static void windows_push(uint16_t delta)
+static void windows_push(uint16_t delta, uint32_t dt)
 {
 	uint32_t recent;
 	uint32_t older;
@@ -202,9 +226,23 @@ static void windows_push(uint16_t delta)
 	uint32_t recent_scaled;
 	uint32_t older_scaled;
 	uint32_t busier;
+	uint16_t extra;
+	uint16_t bucket_ms;
+
+	if (dt <= APP_PUBLISH_MS) {
+		extra = 0;
+		bucket_ms = (uint16_t)APP_PUBLISH_MS;
+	} else if ((dt - APP_PUBLISH_MS) > 255UL) {
+		extra = 255U;
+		bucket_ms = (uint16_t)(APP_PUBLISH_MS + 255U);
+	} else {
+		extra = (uint16_t)(dt - APP_PUBLISH_MS);
+		bucket_ms = (uint16_t)(APP_PUBLISH_MS + extra);
+	}
 
 	if (cps_len == APP_STATIC_S) {
 		stat_sum -= cps_buckets[cps_pos];
+		stat_elapsed_ms -= (uint32_t)APP_PUBLISH_MS + cps_extra[cps_pos];
 	}
 	if (dyn_len == APP_DYNAMIC_MAX) {
 		uint16_t drop = (uint16_t)((cps_pos + APP_STATIC_S - APP_DYNAMIC_MAX) %
@@ -213,7 +251,9 @@ static void windows_push(uint16_t delta)
 		dyn_sum -= cps_buckets[drop];
 	}
 	cps_buckets[cps_pos] = delta;
+	cps_extra[cps_pos] = (uint8_t)extra;
 	stat_sum += delta;
+	stat_elapsed_ms += bucket_ms;
 	dyn_sum += delta;
 	cps_pos = (uint16_t)((cps_pos + 1U) % APP_STATIC_S);
 	if (cps_len < APP_STATIC_S) {
@@ -250,17 +290,94 @@ static void windows_push(uint16_t delta)
 	}
 }
 
-static void publish_rates(void)
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+static uint16_t native_status(void)
 {
+	uint16_t s = 0;
+	uint8_t attempts = snap_attempts;
+
+	if (snap_valid) {
+		s |= GN_STATUS_VALID;
+	}
+	if (snap_full) {
+		s |= GN_STATUS_WINDOW_FULL;
+	}
+	if (snap_app == APP_DELAY || snap_app == APP_SETTLE ||
+	    snap_app == APP_RUN || snap_app == APP_COOLDOWN) {
+		s |= GN_STATUS_HV_FOLLOWING;
+	}
+	if (snap_app == APP_SETTLE) {
+		s |= GN_STATUS_HV_SETTLING;
+	}
+	if (snap_app == APP_COOLDOWN) {
+		s |= GN_STATUS_HV_COOLDOWN;
+	}
+	if (snap_app == APP_FAULT) {
+		s |= GN_STATUS_HV_FAULT;
+	}
+	if (snap_overflow) {
+		s |= GN_STATUS_OVERFLOW;
+	}
+	if (attempts > 15U) {
+		attempts = 15U;
+	}
+	return (uint16_t)(s | ((uint16_t)attempts << 8));
+}
+
+static void native_touch_status(uint8_t app, uint8_t attempts)
+{
+	snap_app = app;
+	snap_attempts = attempts;
+	snap_valid = (uint8_t)((app == APP_RUN) && run_has_sample);
+	twi_slave_set_native_status(native_status());
+}
+
+static void native_publish_rates(uint8_t app, uint8_t attempts)
+{
+	uint8_t ov_cpm = 0;
+	uint8_t ov_dose = 0;
+	uint32_t cpm;
+	uint32_t dose;
+	uint32_t elapsed = stat_elapsed_ms;
+
+	cpm = radiation_cpm_x10(stat_sum, elapsed, &ov_cpm);
+	dose = radiation_dose_nsvh(stat_sum, elapsed,
+				   RADIATION_SBM20_NSVH_PER_CPM_Q16,
+				   &ov_dose);
+	if (snap_seq < 0xFFFFFFFFUL) {
+		snap_seq++;
+	} else {
+		ov_cpm = 1;
+	}
+	run_has_sample = 1;
+	snap_valid = 1;
+	snap_full = (uint8_t)(cps_len == APP_STATIC_S);
+	snap_overflow = (uint8_t)(ov_cpm | ov_dose);
+	snap_app = app;
+	snap_attempts = attempts;
+	twi_slave_publish_native(dose, cpm, native_status(), snap_seq,
+				 RADIATION_SBM20_NSVH_PER_CPM_Q16,
+				 stat_sum, elapsed);
+}
+#endif
+
+static void publish_rates(uint8_t app, uint8_t attempts)
+{
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+	native_publish_rates(app, attempts);
+#else
 	uint16_t sens = radsens_sensitivity();
 	uint32_t dynamic_x10;
 	uint32_t static_x10;
 
+	(void)app;
+	(void)attempts;
 	dynamic_x10 = radiation_counts_to_urh_x10(dyn_sum,
 		(uint32_t)dyn_len * APP_PUBLISH_MS, sens);
 	static_x10 = radiation_counts_to_urh_x10(stat_sum,
 		(uint32_t)cps_len * APP_PUBLISH_MS, sens);
 	radsens_publish_radiation(dynamic_x10, static_x10);
+#endif
 }
 
 static void enter_fault(uint8_t attempts, uint32_t now_ms, uint32_t *last_ms,
@@ -269,8 +386,12 @@ static void enter_fault(uint8_t attempts, uint32_t now_ms, uint32_t *last_ms,
 	hv_gm_quiesce();
 	gm_counter_close_window();
 	radsens_on_fault();
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+	native_touch_status(APP_FAULT, attempts);
+#else
 	radsens_publish_radiation(0, 0);
 	radsens_set_hv_status(RADSENS_HV_GIVEN_UP, attempts);
+#endif
 	*fault_step = 0;
 	*last_ms = now_ms;
 	gpio_led_set(1);
@@ -281,9 +402,13 @@ static void enter_idle(uint8_t *attempts, uint8_t *app)
 {
 	hv_gm_quiesce();
 	gm_counter_close_window();
-	radsens_publish_radiation(0, 0);
 	*attempts = 0;
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+	native_touch_status(APP_IDLE, 0);
+#else
+	radsens_publish_radiation(0, 0);
 	radsens_set_hv_status(RADSENS_HV_FOLLOWING, 0);
+#endif
 	gpio_led_set(0);
 	*app = APP_IDLE;
 }
@@ -293,8 +418,12 @@ static void enter_cooldown(uint8_t attempts, uint32_t now_ms, uint32_t *phase_ms
 {
 	hv_gm_quiesce();
 	gm_counter_close_window();
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+	native_touch_status(APP_COOLDOWN, attempts);
+#else
 	radsens_publish_radiation(0, 0);
 	radsens_set_hv_status(RADSENS_HV_COOLDOWN, attempts);
+#endif
 	*phase_ms = now_ms;
 	*cooldown_ms = cooldown_ms_for(attempts);
 	*last_ms = now_ms;
@@ -329,7 +458,11 @@ static uint8_t enter_settle(uint32_t now_ms, uint32_t *phase_ms, uint32_t *settl
 	if (*attempts < 255U) {
 		(*attempts)++;
 	}
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+	native_touch_status(APP_SETTLE, *attempts);
+#else
 	radsens_set_hv_status(RADSENS_HV_FOLLOWING, *attempts);
+#endif
 	*phase_ms = now_ms;
 	*settle_ok_ms = 0;
 	gpio_led_set(0);
@@ -339,15 +472,21 @@ static uint8_t enter_settle(uint32_t now_ms, uint32_t *phase_ms, uint32_t *settl
 
 static void enter_run(uint32_t now_ms, uint32_t *last_publish_ms,
 		      uint32_t *counted_window, uint32_t *bucket_window,
-		      uint8_t *app)
+		      uint8_t attempts, uint8_t *app)
 {
 	gm_counter_open_window();
 	*counted_window = 0;
 	*bucket_window = 0;
 	*last_publish_ms = now_ms;
 	windows_clear();
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+	run_has_sample = 0;
+	native_touch_status(APP_RUN, attempts);
+#else
+	(void)attempts;
 	twi_slave_clear_pulses();
 	radsens_publish_radiation(0, 0);
+#endif
 	*app = APP_RUN;
 }
 
@@ -375,6 +514,9 @@ int main(void)
 	gm_counter_init();
 	twi_slave_init();
 	radsens_init();
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+	native_touch_status(APP_DELAY, 0);
+#endif
 	sei();
 
 	for (;;) {
@@ -447,7 +589,7 @@ int main(void)
 						run_ok_ms = now_ms;
 						enter_run(now_ms, &last_publish_ms,
 							  &counted_window, &bucket_window,
-							  &app);
+							  attempts, &app);
 					}
 				} else {
 					settle_ok_ms = 0;
@@ -459,23 +601,30 @@ int main(void)
 				if (attempts != 0U &&
 				    (now_ms - run_ok_ms) >= APP_BUDGET_CLEAR_MS) {
 					attempts = 0;
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+					native_touch_status(APP_RUN, 0);
+#else
 					radsens_set_hv_status(RADSENS_HV_FOLLOWING, 0);
+#endif
 				}
 				counted_window = window;
 				if (add > 65535UL) {
 					add = 65535UL;
 				}
+#ifndef GEIGERNODE_PROTOCOL_NATIVE
 				twi_slave_count_pulses((uint16_t)add);
+#endif
 				if ((now_ms - last_publish_ms) >= APP_PUBLISH_MS) {
 					uint32_t delta = window - bucket_window;
+					uint32_t dt = now_ms - last_publish_ms;
 
 					last_publish_ms = now_ms;
 					bucket_window = window;
 					if (delta > 65535UL) {
 						delta = 65535UL;
 					}
-					windows_push((uint16_t)delta);
-					publish_rates();
+					windows_push((uint16_t)delta, dt);
+					publish_rates(APP_RUN, attempts);
 				}
 				if (radsens_led_enabled() && add > 0UL) {
 					pulse_on_until = now_ms + GM_PULSE_LED_MS;

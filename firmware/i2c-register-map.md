@@ -1,6 +1,8 @@
-# GeigerNode I2C register map
+# GeigerNode I2C register map (RadSens)
 
-Slave address `0x66` until a host changes it. This is the ClimateGuard RadSens map. Hardware TWI0 is the slave on PC4 (SDA) and PC5 (SCL). The bit-banged image remains on `fallback/bitbang-i2c`.
+This is the ClimateGuard RadSens map at `0x66`, built with `make PROTOCOL=radsens`. Protocol v1 at `0x67` is `make PROTOCOL=native`; see `geigernode-i2c-protocol.md`.
+
+Slave address `0x66` until a host changes it. Hardware TWI0 is the slave on PC4 (SDA) and PC5 (SCL). The bit-banged image remains on `fallback/bitbang-i2c`.
 
 A master write's first data byte is the register pointer. Up to two data bytes after that are applied. Further bytes in that write are acknowledged and ignored. A pointer of `0x15` or higher is stored as `0x00`. A read with no pointer byte starts at `0x00`. Bytes inside one read increment. After `0x14`, further bytes in that burst are `0xFF`.
 
