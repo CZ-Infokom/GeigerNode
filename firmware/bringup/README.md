@@ -1,8 +1,59 @@
 # GeigerNode bring-up
 
-Current step: SBM-20 datasheet factor, flashed and verified 2026-11-05, 8902 bytes. Address `0x66`, device ID `0x7D`, firmware `0x03`, sensitivity `65` (`0x41 0x00`) unless EEPROM holds another pair. Static radiation is the last 500 s. Dynamic radiation is an adaptive window of 1..122 s. `0x09` clears on read. A host can write HV on/off, the LED enable, address `0x03`..`0x77`, and sensitivity `0`..`510`. Address and sensitivity are stored at EEPROM 960. `make flash` chip-erases that record and restores 65. Hardware TWI0 stays off and SCL is never driven. Dose uses the integer sensitivity register: µR/h = CPM * 60 / 65. The fitted tube is an SBM-20. Keep 380 V, 2400 Hz, the 100 µs cap, and zero blanking. Every reset holds the LED on for 500 ms, then high voltage. There is no arm word. Confirm the anode resistor is in series and is at least 1 MΩ before flashing; 5.1 MΩ is the datasheet recommendation. The JNA DR-M3 comparison has not been run. Stay clear of the HV section when flashing.
+Current step: hardware TWI0 RadSens slave on `feature/hw-twi0-poc`, flashed and verified 2026-11-06, 8724 bytes, firmware `0x04`. ESP32-C3 reads `7D 04` and BME680 `0x61`. Bit-bang fallback is `fallback/bitbang-i2c`. After `make flash` the LED is on for 500 ms, then 380 V starts. Stay clear of the HV section.
 
 The sections below are the historical bring-up record. Fuses were written once and are not to be changed.
+
+## Hardware TWI0 proof of concept (issue #3)
+
+Standalone image. PB1 / HV_SW is forced low. No Timer1, ADC, GM counter, pin-change I2C, or EEPROM writes. PD7 blinks a short pulse about once a second. Hardware TWI0 is the slave at `0x66` with fixed registers:
+
+| Address | Value |
+| --- | --- |
+| `0x00` | `0x7D` |
+| `0x01` | `0x03` |
+| `0x06`..`0x08` | `00 00 3C` |
+| `0x12`..`0x13` | `41 00` |
+
+Register `0x1F` is the number of recent TWI status codes (0..16). Registers `0x20`..`0x2F` hold those codes (`TWSR0 & 0xF8`), oldest first among the newest 16.
+
+Build from `firmware/` (does not touch the board):
+
+```sh
+make twi-hw-test
+```
+
+If `/opt/avr8-gnu-toolchain-4.0.0` is missing, the Makefile falls back to `/opt/avr-gcc-15.2.0`.
+
+The live ISP programmer is Flipper Chir3n running `[AVR] AVR Flasher` as STK500v1 on CDC `if02`. `make` defaults to that port. Do not use Flipper CLI (`if00`). Atmel-ICE remains `make PROGRAMMER=atmelice_isp PORT=usb`. This host's avrdude 8.1 needs `-C /etc/avrdude.conf`; the Makefile passes it. A 2026-11-06 signature read over Flipper returned `0x1E 0x95 0x16`.
+
+Flashed 2026-11-06. HFUSE `0xD9` does not set EESAVE, so that flash chip-erased EEPROM. The next production `make flash` restores address `0x66` and sensitivity 65.
+
+```sh
+make flash-twi-hw-test
+make verify-twi-hw-test
+```
+
+Before any I2C traffic: confirm the LED is the slow short blink and that PB1 is low. Do not put a meter on the HV output.
+
+I2C host is the ESP32-C3 bench tester in `/mnt/Work/dev/PlatformIO/Projects/I2C_bridge` (SDA GPIO4, SCL GPIO5, 100 kHz). USB-JTAG serial is `/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_B8:1F:3F:FE:39:AC-if00` at 115200 baud. Commands: `s` scan, `r aa rr n` repeated START, `R aa rr n` STOP+START. Addresses are hex; length is decimal.
+
+```text
+s
+r 66 00 2
+r 66 06 3
+r 66 12 2
+R 66 00 2
+r 76 D0 1
+```
+
+2026-11-06 result: scan `0x66` and `0x76`. Repeated START and STOP+START both returned `7D 03`, `00 00 3C`, `41 00`. BME680 chip ID `0x61`. A 21-byte read from `0x00` was `7D 03 00 00 00 00 00 00 3C ... 41 00 00`. Burst reads of those three registers were correct after serial warmup. If a read is wrong or SCL stays low:
+
+```text
+r 66 1F 17
+```
+
+That returns the status-count byte and up to 16 recent TWI status codes (`TWSR0 & 0xF8`). After a long sequential read the trace was `0xB8` then `0xC0`. This pass is the gate for moving the RadSens map onto this state machine. The production bit-banged slave stays in git until that lands.
 
 ## Phase 0 — host toolchain
 
@@ -842,7 +893,7 @@ converge.
 
 ## RadSens I2C
 
-The live image is the SBM-20 RadSens slave in `i2c-register-map.md`. Default address `0x66`. Device ID `0x00` is `0x7D`. The firmware version at `0x01` is `0x03`. A master write of one byte sets the register pointer. Up to two data bytes after it are applied. The next read, after STOP or a repeated START, starts at that pointer. Bytes inside one read burst increment. Static radiation is `0x06..0x08`, 24-bit big-endian, unit 0.1 µR/h, last 500 s. Dynamic radiation at `0x03..0x05` is the adaptive window under 123 s. Conversion is `µR/h = CPM * 60 / S`, where `S` is the integer at `0x12`. The default is 65. Pulse count at `0x09..0x0A` is 16-bit big-endian and clears when either byte is read. `0x11` starts and stops high voltage. `0x10` and `0x12` are stored across reset until `make flash` erases EEPROM.
+The live image is the SBM-20 RadSens slave in `i2c-register-map.md`. Default address `0x66`. Device ID `0x00` is `0x7D`. The firmware version at `0x01` is `0x04`. Hardware TWI0 is the slave. A master write of one byte sets the register pointer. Up to two data bytes after it are applied. The next read, after STOP or a repeated START, starts at that pointer. Bytes inside one read burst increment. Static radiation is `0x06..0x08`, 24-bit big-endian, unit 0.1 µR/h, last 500 s. Dynamic radiation at `0x03..0x05` is the adaptive window under 123 s. Conversion is `µR/h = CPM * 60 / S`, where `S` is the integer at `0x12`. The default is 65. Pulse count at `0x09..0x0A` is 16-bit big-endian and clears when either byte is read. `0x11` starts and stops high voltage. `0x10` and `0x12` are stored across reset until `make flash` erases EEPROM.
 
 On 2026-10-05 a host read of `0x00` returned `0x00 0x00`, then `0x3B 0xAA` with the source present, and every other address returned those same two bytes. After the first pointer change every address returned `0x00`. That was the high byte of a leftover dose register. A read without a pointer byte now starts at `0x00`. On 2026-10-07 the Flipper bridge read `0x7D 0x01` from `0x00` and `0x8A 0x00` from `0x12` on the previous image. After the next flash:
 

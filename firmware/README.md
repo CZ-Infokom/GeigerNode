@@ -1,15 +1,12 @@
 # GeigerNode firmware
 
-Bare-metal bring-up for the ATmega328PB on GeigerNode. Characterization is frozen: nominal target 380 V, pulse cap 100 µs, production abort around 400 V. This image is the SBM-20 RadSens slave. Every reset waits 500 ms, regulates 380 V at 2400 Hz, counts every falling edge on PD2, and publishes ClimateGuard RadSens registers. The default address is `0x66`. The map is `i2c-register-map.md`. There is no arm word. Dose uses the integer sensitivity register, default 65 impulses/µR. Dynamic radiation is an adaptive window under 123 s. Static radiation is the last 500 s. A host can stop and start high voltage, change the address, and change the sensitivity. An operational HV fault retries four times, with the switch off for 30 s, then 2 min, then 10 min. An illegal pulse or rate, or a spent budget, stays off until the host writes `1` to `0x11`. Firmware version is `0x03`. During the 500 ms wait the LED is on. During the count it flashes on for each pulse while the LED register is enabled. `make flash` programs flash only and chip-erases EEPROM, which restores address `0x66` and sensitivity 65. `make read-gm-test` still reads EEPROM but this image does not write a GM record.
+Bare-metal bring-up for the ATmega328PB on GeigerNode. Characterization is frozen: nominal target 380 V, pulse cap 100 µs, production abort around 400 V. This image is the SBM-20 RadSens slave. Every reset waits 500 ms, regulates 380 V at 2400 Hz, counts every falling edge on PD2, and publishes ClimateGuard RadSens registers. The default address is `0x66`. The map is `i2c-register-map.md`. There is no arm word. Dose uses the integer sensitivity register, default 65 impulses/µR. Dynamic radiation is an adaptive window under 123 s. Static radiation is the last 500 s. A host can stop and start high voltage, change the address, and change the sensitivity. An operational HV fault retries four times, with the switch off for 30 s, then 2 min, then 10 min. An illegal pulse or rate, or a spent budget, stays off until the host writes `1` to `0x11`. Firmware version is `0x04`. Hardware TWI0 is the slave. The bit-banged image is on `fallback/bitbang-i2c`. During the 500 ms wait the LED is on. During the count it flashes on for each pulse while the LED register is enabled. `make flash` programs flash only and chip-erases EEPROM, which restores address `0x66` and sensitivity 65. `make read-gm-test` still reads EEPROM but this image does not write a GM record.
 
 ## Toolchain
 
-Compiler tools come from `/opt/avr8-gnu-toolchain-4.0.0`:
+Compiler tools come from `/opt/avr8-gnu-toolchain-4.0.0` when that prefix exists. This host falls back to `/opt/avr-gcc-15.2.0` (`avr-gcc` 15.2.0).
 
-- `avr-gcc` `AVR_8_bit_GNU_Toolchain_4.0.0_52` (GCC 15.1.0)
-- `avr-objcopy` and `avr-size` from the same tree (binutils 2.44)
-
-`avrdude` is the system binary (`/usr/bin/avrdude` 8.1). It is not shipped in that toolchain directory. An `avr-gcc` 12.1.0 may exist on `PATH`; the Makefile calls the 4.0.0 tools by absolute path.
+`avrdude` is the system binary (`/usr/bin/avrdude` 8.1). It is not shipped in the toolchain directory. This install needs `-C /etc/avrdude.conf`; the Makefile passes it. An `avr-gcc` 7.3.0 may exist on `PATH`; the Makefile calls the chosen prefix by absolute path.
 
 ```sh
 make toolchain-info
@@ -30,7 +27,7 @@ Build output goes to `bin/`, which git ignores. `make` builds `bin/geigernode.he
 
 ## Program
 
-The board is externally powered. Atmel-ICE does not power the target. Programmer settings are `-c atmelice_isp -P usb -p m328pb`.
+The board is externally powered. The programmer does not power the target. Default programmer settings are Flipper AVR Flasher as STK500v1 on CDC `if02`: `-c stk500v1 -P /dev/serial/by-id/usb-Flipper_Devices_Inc.*-if02 -b 115200 -p m328pb`. Atmel-ICE is `-c atmelice_isp -P usb`.
 
 ```sh
 make read-signature

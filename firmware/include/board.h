@@ -13,8 +13,8 @@
  * PD3 is spare and stays untouched.
  * HV_ADC is PC0 / ADC0. The default image leaves the converter off while it is read.
  * I2C slave address is 0x66. SDA is PC4 and SCL is PC5. Hardware TWI0
- * stays off so it cannot hold SCL. A START on SDA is handled by pin
- * change, then the transaction is polled. SCL is never driven.
+ * is the slave. Pin-change bit-bang is off. The bit-banged image is on
+ * branch fallback/bitbang-i2c.
  * Timer2 is the millisecond tick. Its pin outputs stay disconnected.
  * Timer1 is the HV pulse. Its hard maximum width is 100 us.
  * Every reset waits 500 ms, then regulates 380 V at 2400 Hz and publishes
