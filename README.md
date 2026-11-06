@@ -21,6 +21,7 @@ The JNA DR-M3 comparison has not been run. Do not replace 65 until that measurem
 | Path | What it is |
 | --- | --- |
 | [`firmware/`](firmware/) | AVR sources, Makefile, and flash targets |
+| [`hardware/`](hardware/) | KiCad 10 rev A board. `hardware/production/` is the 2026-09-17 fab export |
 | [`firmware/geigernode-i2c-protocol.md`](firmware/geigernode-i2c-protocol.md) | Native I2C protocol v1 |
 | [`firmware/i2c-register-map.md`](firmware/i2c-register-map.md) | RadSens register map |
 | [`firmware/bringup/README.md`](firmware/bringup/README.md) | Bring-up log and host toolchain |
