@@ -33,3 +33,5 @@ firmware/bin/
 _autosave-*
 *.lck
 fp-info-cache
+firmware/flipper/
+__pycache__

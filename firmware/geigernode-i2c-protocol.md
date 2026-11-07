@@ -2,11 +2,11 @@
 
 Slave address `0x67` (provisional). This is GeigerNode's own map, not ClimateGuard RadSens. Hardware TWI0 is the slave on PC4 (SDA) and PC5 (SCL). The RadSens image at `0x66` is `make PROTOCOL=radsens`. The bit-banged image remains on `fallback/bitbang-i2c`.
 
-A master write's first data byte is the register pointer. The next bytes are the value. A pointer of `0x22` or higher is stored as `0x00`. A read with no pointer byte starts at `0x00`. Bytes inside one read increment. After `0x21`, further bytes in that burst are `0xFF`.
+A master write's first data byte is the register pointer. The next bytes are the value. A pointer of `0x39` or higher is stored as `0x00`. A read with no pointer byte starts at `0x00`. Bytes inside one read increment. After `0x38`, further bytes in that burst are `0xFF`.
 
-All multi-byte values are unsigned big-endian. Reads do not clear counters. A read latches the published bank on SLA+R so `0x04`..`0x1D` cannot tear. The sample sequence stays put until main publishes a new snapshot, once per second while the tube is in RUN.
+All multi-byte values are unsigned big-endian. Reads do not clear counters. A read latches the published bank on SLA+R so `0x04`..`0x38` cannot tear. The sample sequence stays put until main publishes a new snapshot, once per second while the tube is in RUN.
 
-Meshtastic only needs `0x04`..`0x0B` (nSv/h, CPM × 10, status). Diagnostic hosts may read through `0x21`.
+Meshtastic only needs `0x04`..`0x0B` (nSv/h, CPM × 10, status). Diagnostic hosts may read through `0x38`. A 34-byte read through `0x21` remains valid.
 
 HV still starts after 500 ms. Native v2 has no host HV-off register. Stay clear of the HV section. Do not raise 380 V or 2400 Hz. An accepted falling edge holds off further edges for the holdoff at `0x20`. An ignored edge does not move that window. The default holdoff is 300 µs.
 
@@ -16,7 +16,7 @@ HV still starts after 500 ms. Native v2 has no host HV-off register. Stay clear 
 | --- | --- | --- |
 | `0x00`..`0x01` | uint16 | Device ID `0x474E` ("GN") |
 | `0x02` | uint8 | Protocol version `2` |
-| `0x03` | uint8 | Capabilities `0x07` (bit 0 = CPM/nSv/h, bit 1 = raw count + elapsed, bit 2 = writable window, holdoff, and calibration) |
+| `0x03` | uint8 | Capabilities `0x0F` (bit 0 = CPM/nSv/h, bit 1 = raw count + elapsed, bit 2 = writable window, holdoff, and calibration, bit 3 = inter-arrival histogram) |
 | `0x04`..`0x07` | uint32 | Estimated dose rate, nSv/h |
 | `0x08`..`0x0B` | uint32 | Count rate, CPM × 10 |
 | `0x0C`..`0x0D` | uint16 | Measurement and HV status |
@@ -26,6 +26,19 @@ HV still starts after 500 ms. Native v2 has no host HV-off register. Stay clear 
 | `0x1A`..`0x1D` | uint32 | Actual observation duration, ms |
 | `0x1E`..`0x1F` | uint16 | Static window, seconds. Read/write. Range 1..400. Default 300 |
 | `0x20`..`0x21` | uint16 | Holdoff, microseconds. Read/write. Range 0..300. Default 300 |
+| `0x22`..`0x25` | uint32 | Shortest accepted gap this RUN, µs. `0xFFFFFFFF` until the second accepted edge |
+| `0x26`..`0x27` | uint16 | Gaps under 50 µs |
+| `0x28`..`0x29` | uint16 | Gaps 50–100 µs |
+| `0x2A`..`0x2B` | uint16 | Gaps 100–200 µs |
+| `0x2C`..`0x2D` | uint16 | Gaps 200–500 µs |
+| `0x2E`..`0x2F` | uint16 | Gaps 500 µs–1 ms |
+| `0x30`..`0x31` | uint16 | Gaps 1–2 ms |
+| `0x32`..`0x33` | uint16 | Gaps 2–5 ms |
+| `0x34`..`0x35` | uint16 | Gaps 5–10 ms |
+| `0x36`..`0x37` | uint16 | Gaps 10 ms and above |
+| `0x38` | uint8 | Histogram flags. Bit 0 set when any bin is at 65535 |
+
+Writes into `0x22`..`0x38` are acknowledged and ignored.
 
 ## Status `0x0C`..`0x0D`
 
@@ -43,7 +56,7 @@ Low byte:
 
 High byte: HV attempts already used (0..4), same meaning as RadSens `0x0B` high nibble.
 
-Idle (HV off) and fault clear `VALID` and `HV_FOLLOWING`. The last valid dose, CPM, count, elapsed, and sequence stay in the bank. They are not rewritten as zero radiation.
+Idle (HV off) and fault clear `VALID` and `HV_FOLLOWING`. The last valid dose, CPM, count, elapsed, and sequence stay in the bank. They are not rewritten as zero radiation. A saturated histogram bin does not set `OVERFLOW`.
 
 ## Radiation
 
@@ -70,6 +83,10 @@ That is not a new empirical fit and is not computed through µR/h at runtime. Do
 A new RUN still clears the ring. Until the first new one-second snapshot, `VALID` stays clear and the previous frozen bytes remain. Sequence increments only when that new snapshot is published.
 
 Host absence does not enlarge the window. After the configured window is full, elapsed stays near `window_s × 1000` ms. At the default of 300 s that is near 300000 ms. Sequence is a uint32 that saturates rather than wrapping.
+
+## Inter-arrival histogram
+
+The nine bins and the shortest gap count accepted gaps since `gm_counter_open_window()` at the start of this RUN. They are not the rolling dose window at `0x16`. After that window fills, or after a host shortens it, the two numbers describe different spans. The first accepted edge has no gap, so the bin sum is one behind the RUN pulse count until a bin saturates. Changing the window or the holdoff does not clear the bins. The default 300 µs holdoff drops shorter edges, so the bins under 300 µs stay empty until a host writes a shorter holdoff. Each bin saturates at 65535 and sets bit 0 of `0x38`. That flag does not set dose `OVERFLOW`.
 
 ## Writes
 
@@ -100,11 +117,14 @@ ESP32-C3 serial bridge (`/mnt/Work/dev/PlatformIO/Projects/I2C_bridge`), 115200 
 
 ```text
 s
-r 67 00 2
-r 67 02 1
-r 67 04 8
-r 67 00 34
-r 76 D0 1
+x 67 00 / 2
+x 67 02 / 1
+x 67 04 / 8
+x 67 00 / 32
+x 67 20 / 25
+x 76 D0 / 1
 ```
 
-A scan lists `0x67` and `0x76`. `r 67 00 2` returns `47 4E`. `r 67 02 1` returns `02`. `r 76 D0 1` returns `61`. Writing `00 09 3B 14` at `0x12` stores the default calibration.
+That bridge accepts at most 32 bytes in one transfer. The 57-byte map is `x 67 00 / 32`, then `x 67 20 / 25`. Each command writes the pointer first.
+
+A scan lists `0x67` and `0x76`. `x 67 00 / 2` returns `47 4E`. `x 67 02 / 1` returns `02`. `x 76 D0 / 1` returns `61`. Writing `00 09 3B 14` at `0x12` stores the default calibration.

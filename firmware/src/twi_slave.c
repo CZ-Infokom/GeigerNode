@@ -5,9 +5,7 @@
 #include <util/twi.h>
 
 #include "board.h"
-#ifndef GEIGERNODE_PROTOCOL_NATIVE
 #include "gm_counter.h"
-#endif
 #include "radiation.h"
 #include "twi_slave.h"
 
@@ -18,7 +16,7 @@
 
 static volatile uint8_t regs[2][TWI_REG_COUNT];
 static volatile uint8_t *volatile regs_pub;
-static uint8_t txn[TWI_REG_COUNT];
+static volatile uint8_t *volatile read_bank;
 static volatile uint8_t addr_ptr;
 static uint8_t send_ptr;
 static uint8_t expect_pointer;
@@ -65,6 +63,7 @@ static void twi_fill_bank(volatile uint8_t *dest)
 	twi_store_u32(&dest[GN_REG_CAL], RADIATION_SBM20_NSVH_PER_CPM_Q16);
 	twi_store_u16(&dest[GN_REG_WINDOW_S], GN_WINDOW_DEFAULT_S);
 	twi_store_u16(&dest[GN_REG_HOLDOFF_US], GN_HOLDOFF_DEFAULT_US);
+	twi_store_u32(&dest[GN_REG_MIN_INTERVAL], 0xFFFFFFFFUL);
 }
 
 #else
@@ -96,12 +95,43 @@ static void twi_fill_bank(volatile uint8_t *dest)
 
 #endif
 
+/*
+ * Called only inside ATOMIC_BLOCK. Returns a bank that is not frozen
+ * by an in-flight read. When the published bank is frozen, the idle
+ * bank is filled from it so the reader keeps the old snapshot.
+ */
+static volatile uint8_t *twi_begin_update(void)
+{
+	volatile uint8_t *dest;
+	volatile uint8_t *other;
+	uint8_t i;
+
+	other = (regs_pub == regs[0]) ? regs[1] : regs[0];
+	if (regs_pub == read_bank) {
+		dest = other;
+		for (i = 0; i < TWI_REG_COUNT; i++) {
+			dest[i] = regs_pub[i];
+		}
+	} else if (other == read_bank) {
+		dest = regs_pub;
+	} else {
+		dest = other;
+		for (i = 0; i < TWI_REG_COUNT; i++) {
+			dest[i] = regs_pub[i];
+		}
+	}
+	return dest;
+}
+
 #ifndef GEIGERNODE_PROTOCOL_NATIVE
 static void twi_put(uint8_t reg, uint8_t value)
 {
+	volatile uint8_t *dest;
+
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-		regs[0][reg] = value;
-		regs[1][reg] = value;
+		dest = twi_begin_update();
+		dest[reg] = value;
+		regs_pub = dest;
 	}
 }
 #endif
@@ -116,16 +146,6 @@ static void twi_accept_pointer(uint8_t value)
 	expect_pointer = 0;
 	have_new_pointer = 1;
 	twi_write_len = 0;
-}
-
-static void twi_latch(void)
-{
-	uint8_t i;
-	volatile uint8_t *src = regs_pub;
-
-	for (i = 0; i < TWI_REG_COUNT; i++) {
-		txn[i] = src[i];
-	}
 }
 
 #ifndef GEIGERNODE_PROTOCOL_NATIVE
@@ -159,8 +179,9 @@ static uint8_t twi_pulse_lo(void)
 static void twi_send_byte(void)
 {
 	uint8_t byte;
+	volatile uint8_t *bank = read_bank;
 
-	if (send_ptr >= TWI_REG_COUNT) {
+	if (send_ptr >= TWI_REG_COUNT || bank == 0) {
 		byte = 0xFFU;
 #ifndef GEIGERNODE_PROTOCOL_NATIVE
 	} else if (send_ptr == TWI_REG_PULSE_COUNT) {
@@ -169,7 +190,7 @@ static void twi_send_byte(void)
 		byte = twi_pulse_lo();
 #endif
 	} else {
-		byte = txn[send_ptr];
+		byte = bank[send_ptr];
 	}
 	TWDR0 = byte;
 	if (send_ptr < 255U) {
@@ -230,7 +251,7 @@ ISR(TWI0_vect)
 
 	case TW_ST_SLA_ACK: /* 0xA8 */
 	case TW_ST_ARB_LOST_SLA_ACK: /* 0xB0 */
-		twi_latch();
+		read_bank = regs_pub;
 		if (have_new_pointer) {
 			send_ptr = addr_ptr;
 			have_new_pointer = 0;
@@ -248,12 +269,14 @@ ISR(TWI0_vect)
 
 	case TW_ST_DATA_NACK: /* 0xC0 */
 	case TW_ST_LAST_DATA: /* 0xC8 */
+		read_bank = 0;
 		TWCR0 = TWI_CR_ACK;
 		break;
 
 	case TW_BUS_ERROR: /* 0x00 */
 		expect_pointer = 0;
 		twi_write_len = 0;
+		read_bank = 0;
 		TWCR0 = TWI_CR_RECOVER;
 		break;
 
@@ -270,6 +293,7 @@ void twi_slave_init(void)
 	twi_fill_bank(regs[0]);
 	twi_fill_bank(regs[1]);
 	regs_pub = regs[0];
+	read_bank = 0;
 	addr_ptr = 0;
 	send_ptr = 0;
 	expect_pointer = 0;
@@ -313,18 +337,13 @@ void twi_slave_init(void)
 void twi_slave_publish_native(uint32_t dose_nsvh, uint32_t cpm_x10,
 			      uint16_t status, uint32_t sequence,
 			      uint32_t cal_q16, uint32_t count,
-			      uint32_t elapsed_ms)
+			      uint32_t elapsed_ms,
+			      const struct gm_histogram *histogram)
 {
-	uint8_t bank;
 	volatile uint8_t *dest;
-	uint8_t i;
 
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-		bank = (uint8_t)((regs_pub == regs[1]) ? 0U : 1U);
-		dest = regs[bank];
-		for (i = 0; i < TWI_REG_COUNT; i++) {
-			dest[i] = regs_pub[i];
-		}
+		dest = twi_begin_update();
 		twi_store_u16(&dest[GN_REG_DEVICE_ID], GN_DEVICE_ID);
 		dest[GN_REG_PROTOCOL] = GN_PROTOCOL_VERSION;
 		dest[GN_REG_CAPS] = GN_CAPS_VALUE;
@@ -335,28 +354,44 @@ void twi_slave_publish_native(uint32_t dose_nsvh, uint32_t cpm_x10,
 		twi_store_u32(&dest[GN_REG_CAL], cal_q16);
 		twi_store_u32(&dest[GN_REG_COUNT], count);
 		twi_store_u32(&dest[GN_REG_ELAPSED], elapsed_ms);
+		twi_store_u32(&dest[GN_REG_MIN_INTERVAL],
+			      histogram->min_interval_us);
+		twi_store_u16(&dest[GN_REG_BIN_LT_50US], histogram->bins[0]);
+		twi_store_u16(&dest[GN_REG_BIN_50_100US], histogram->bins[1]);
+		twi_store_u16(&dest[GN_REG_BIN_100_200US], histogram->bins[2]);
+		twi_store_u16(&dest[GN_REG_BIN_200_500US], histogram->bins[3]);
+		twi_store_u16(&dest[GN_REG_BIN_500US_1MS], histogram->bins[4]);
+		twi_store_u16(&dest[GN_REG_BIN_1_2MS], histogram->bins[5]);
+		twi_store_u16(&dest[GN_REG_BIN_2_5MS], histogram->bins[6]);
+		twi_store_u16(&dest[GN_REG_BIN_5_10MS], histogram->bins[7]);
+		twi_store_u16(&dest[GN_REG_BIN_GE_10MS], histogram->bins[8]);
+		dest[GN_REG_HISTOGRAM_FLAGS] = histogram->flags;
 		regs_pub = dest;
 	}
 }
 
 void twi_slave_set_native_status(uint16_t status)
 {
+	volatile uint8_t *dest;
+
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-		twi_store_u16(&regs[0][GN_REG_STATUS], status);
-		twi_store_u16(&regs[1][GN_REG_STATUS], status);
+		dest = twi_begin_update();
+		twi_store_u16(&dest[GN_REG_STATUS], status);
+		regs_pub = dest;
 	}
 }
 
 void twi_slave_set_native_config(uint16_t window_s, uint16_t holdoff_us,
 				 uint32_t cal_q16)
 {
+	volatile uint8_t *dest;
+
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-		twi_store_u16(&regs[0][GN_REG_WINDOW_S], window_s);
-		twi_store_u16(&regs[1][GN_REG_WINDOW_S], window_s);
-		twi_store_u16(&regs[0][GN_REG_HOLDOFF_US], holdoff_us);
-		twi_store_u16(&regs[1][GN_REG_HOLDOFF_US], holdoff_us);
-		twi_store_u32(&regs[0][GN_REG_CAL], cal_q16);
-		twi_store_u32(&regs[1][GN_REG_CAL], cal_q16);
+		dest = twi_begin_update();
+		twi_store_u16(&dest[GN_REG_WINDOW_S], window_s);
+		twi_store_u16(&dest[GN_REG_HOLDOFF_US], holdoff_us);
+		twi_store_u32(&dest[GN_REG_CAL], cal_q16);
+		regs_pub = dest;
 	}
 }
 
@@ -364,16 +399,10 @@ void twi_slave_set_native_config(uint16_t window_s, uint16_t holdoff_us,
 
 void twi_slave_publish_radiation(uint32_t dynamic_x10, uint32_t static_x10)
 {
-	uint8_t bank;
 	volatile uint8_t *dest;
-	uint8_t i;
 
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-		bank = (uint8_t)((regs_pub == regs[1]) ? 0U : 1U);
-		dest = regs[bank];
-		for (i = 0; i < TWI_REG_COUNT; i++) {
-			dest[i] = regs_pub[i];
-		}
+		dest = twi_begin_update();
 		twi_store_u24(&dest[TWI_REG_DYNAMIC_RAD], dynamic_x10);
 		twi_store_u24(&dest[TWI_REG_STATIC_RAD], static_x10);
 		regs_pub = dest;
@@ -406,18 +435,25 @@ void twi_slave_clear_pulses(void)
 
 void twi_slave_set_address(uint8_t address)
 {
+	volatile uint8_t *dest;
+
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
 		TWAR0 = (uint8_t)(address << 1);
-		twi_put(TWI_REG_ADDRESS, address);
+		dest = twi_begin_update();
+		dest[TWI_REG_ADDRESS] = address;
+		regs_pub = dest;
 	}
 }
 
 void twi_slave_set_sensitivity(uint16_t sensitivity)
 {
+	volatile uint8_t *dest;
+
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-		twi_put(TWI_REG_SENSITIVITY, (uint8_t)sensitivity);
-		twi_put((uint8_t)(TWI_REG_SENSITIVITY + 1U),
-			(uint8_t)(sensitivity >> 8));
+		dest = twi_begin_update();
+		dest[TWI_REG_SENSITIVITY] = (uint8_t)sensitivity;
+		dest[TWI_REG_SENSITIVITY + 1U] = (uint8_t)(sensitivity >> 8);
+		regs_pub = dest;
 	}
 }
 

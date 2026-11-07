@@ -58,6 +58,20 @@ struct gm_counter_snapshot {
 	uint8_t close_interval_count;
 };
 
+/*
+ * Inter-arrival histogram for the native I2C map. Nine exclusive bins in
+ * the same order as gm_counter_snapshot. flags bit 0 is set when any bin
+ * is at 65535. The close log stays off the bus.
+ */
+#define GM_HISTOGRAM_BIN_COUNT 9U
+#define GM_HISTOGRAM_SATURATED 0x01U
+
+struct gm_histogram {
+	uint32_t min_interval_us;
+	uint16_t bins[GM_HISTOGRAM_BIN_COUNT];
+	uint8_t flags;
+};
+
 void gm_counter_init(void);
 
 /* 0 accepts every edge. Values above GM_BLANKING_US clamp to that ceiling. */
@@ -73,6 +87,7 @@ void gm_counter_close_window(void);
 uint32_t gm_counter_window(void);
 uint32_t gm_counter_total(void);
 void gm_counter_snapshot(struct gm_counter_snapshot *out);
+void gm_counter_histogram(struct gm_histogram *out);
 
 /* Returns 1 once after the ISR sees a falling edge, then clears the flag. */
 uint8_t gm_counter_take_pulse(void);

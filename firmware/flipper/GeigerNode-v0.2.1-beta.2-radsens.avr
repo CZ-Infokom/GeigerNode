@@ -1,0 +1,9 @@
+Filetype: Flipper Dump AVR
+Version: 1
+Chip name: ATmega328PB
+Signature: 1E 95 16
+Lfuse: E2
+Hfuse: D9
+Efuse: F5
+Lock: FF
+Dump_flash: GeigerNode-v0.2.1-beta.2-radsens_flash.hex

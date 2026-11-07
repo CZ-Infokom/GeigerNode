@@ -280,6 +280,32 @@ void gm_counter_snapshot(struct gm_counter_snapshot *out)
 	}
 }
 
+void gm_counter_histogram(struct gm_histogram *out)
+{
+	uint8_t flags = 0;
+
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+		out->min_interval_us = gm_min_interval_us;
+		out->bins[0] = gm_bin_lt_50us;
+		out->bins[1] = gm_bin_50_100us;
+		out->bins[2] = gm_bin_100_200us;
+		out->bins[3] = gm_bin_200_500us;
+		out->bins[4] = gm_bin_500us_1ms;
+		out->bins[5] = gm_bin_1_2ms;
+		out->bins[6] = gm_bin_2_5ms;
+		out->bins[7] = gm_bin_5_10ms;
+		out->bins[8] = gm_bin_ge_10ms;
+	}
+	if (out->bins[0] == 65535U || out->bins[1] == 65535U ||
+	    out->bins[2] == 65535U || out->bins[3] == 65535U ||
+	    out->bins[4] == 65535U || out->bins[5] == 65535U ||
+	    out->bins[6] == 65535U || out->bins[7] == 65535U ||
+	    out->bins[8] == 65535U) {
+		flags = GM_HISTOGRAM_SATURATED;
+	}
+	out->flags = flags;
+}
+
 uint8_t gm_counter_take_pulse(void)
 {
 	uint8_t seen;

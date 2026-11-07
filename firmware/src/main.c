@@ -38,9 +38,10 @@ _Static_assert(RADIATION_RADSENS_MAX == 1440000UL,
 	       "RadSens intensity saturates at 144000.0 uR/h");
 #ifdef GEIGERNODE_PROTOCOL_NATIVE
 _Static_assert(TWI_SLAVE_ADDRESS == 0x67U, "native address is 0x67");
-_Static_assert(TWI_REG_COUNT == 0x22U, "native map is 34 bytes");
+_Static_assert(TWI_REG_COUNT == 0x39U, "native map is 57 bytes");
 _Static_assert(GN_PROTOCOL_VERSION == 2U, "protocol version is 2");
-_Static_assert(GN_CAPS_VALUE == 0x07U, "caps include writable config");
+_Static_assert(GN_CAPS_VALUE == 0x0FU, "caps include histogram");
+_Static_assert(GM_HISTOGRAM_BIN_COUNT == 9U, "nine exclusive bins");
 _Static_assert(RADIATION_SBM20_NSVH_PER_CPM_Q16 == 604948UL,
 	       "SBM-20 Q16.16 is round(600/65*65536)");
 #else
@@ -94,12 +95,16 @@ _Static_assert(TWI_REG_HV_STATUS == 0x0BU, "HV status is register 0x0B");
 #define APP_COOLDOWN 5U
 
 static uint16_t cps_buckets[APP_STATIC_MAX];
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
 static uint8_t cps_extra[APP_STATIC_MAX];
+#endif
 static uint16_t cps_pos;
 static uint16_t cps_len;
 static uint16_t window_s = 300U;
 static uint32_t stat_sum;
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
 static uint32_t stat_elapsed_ms;
+#endif
 static uint32_t dyn_sum;
 static uint8_t dyn_len;
 
@@ -140,19 +145,20 @@ static uint32_t time_ms(void)
 
 static void led_fault(uint32_t now_ms, uint32_t *last_ms, uint8_t *step)
 {
-	static const uint16_t dwell_ms[9] = {
-		100, 100, 100, 100, 100, 100, 100, 100, 700
-	};
-	static const uint8_t level[9] = {
-		1, 0, 1, 0, 1, 0, 1, 0, 0
-	};
+	/*
+	 * Four short on/off pairs at 100 ms, then 700 ms dark.
+	 * Steps 0,2,4,6 are on; 1,3,5,7,8 are off.
+	 */
+	uint16_t dwell = (*step == 8U) ? 700U : 100U;
+	uint8_t next;
 
-	if ((now_ms - *last_ms) < dwell_ms[*step]) {
+	if ((now_ms - *last_ms) < dwell) {
 		return;
 	}
 	*last_ms = now_ms;
-	*step = (uint8_t)((*step + 1U) % 9U);
-	gpio_led_set(level[*step]);
+	next = (uint8_t)((*step + 1U) % 9U);
+	*step = next;
+	gpio_led_set((uint8_t)((next < 8U) && ((next & 1U) == 0U)));
 }
 
 static void led_cooldown(uint32_t now_ms, uint32_t *last_ms)
@@ -202,12 +208,16 @@ static void windows_clear(void)
 
 	for (i = 0; i < APP_STATIC_MAX; i++) {
 		cps_buckets[i] = 0;
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
 		cps_extra[i] = 0;
+#endif
 	}
 	cps_pos = 0;
 	cps_len = 0;
 	stat_sum = 0;
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
 	stat_elapsed_ms = 0;
+#endif
 	dyn_sum = 0;
 	dyn_len = 0;
 }
@@ -291,6 +301,7 @@ static void windows_push(uint16_t delta, uint32_t dt)
 	uint32_t recent_scaled;
 	uint32_t older_scaled;
 	uint32_t busier;
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
 	uint16_t extra;
 	uint16_t bucket_ms;
 
@@ -304,6 +315,9 @@ static void windows_push(uint16_t delta, uint32_t dt)
 		extra = (uint16_t)(dt - APP_PUBLISH_MS);
 		bucket_ms = (uint16_t)(APP_PUBLISH_MS + extra);
 	}
+#else
+	(void)dt;
+#endif
 
 	/*
 	 * The history ring holds APP_STATIC_MAX seconds. The published
@@ -314,7 +328,9 @@ static void windows_push(uint16_t delta, uint32_t dt)
 	 */
 	if (cps_len == APP_STATIC_MAX && window_s >= cps_len) {
 		stat_sum -= cps_buckets[cps_pos];
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
 		stat_elapsed_ms -= (uint32_t)APP_PUBLISH_MS + cps_extra[cps_pos];
+#endif
 	}
 	if (dyn_len == APP_DYNAMIC_MAX) {
 		uint16_t drop = (uint16_t)((cps_pos + APP_STATIC_MAX -
@@ -324,9 +340,13 @@ static void windows_push(uint16_t delta, uint32_t dt)
 		dyn_sum -= cps_buckets[drop];
 	}
 	cps_buckets[cps_pos] = delta;
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
 	cps_extra[cps_pos] = (uint8_t)extra;
+#endif
 	stat_sum += delta;
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
 	stat_elapsed_ms += bucket_ms;
+#endif
 	dyn_sum += delta;
 	cps_pos = (uint16_t)((cps_pos + 1U) % APP_STATIC_MAX);
 	if (cps_len < APP_STATIC_MAX) {
@@ -341,7 +361,9 @@ static void windows_push(uint16_t delta, uint32_t dt)
 					   APP_STATIC_MAX);
 
 		stat_sum -= cps_buckets[drop];
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
 		stat_elapsed_ms -= (uint32_t)APP_PUBLISH_MS + cps_extra[drop];
+#endif
 	}
 	if (dyn_len <= APP_DYNAMIC_RECENT) {
 		return;
@@ -420,10 +442,12 @@ static void native_publish_rates(uint8_t app, uint8_t attempts)
 	uint32_t cpm;
 	uint32_t dose;
 	uint32_t elapsed = stat_elapsed_ms;
+	struct gm_histogram histogram;
 
 	cpm = radiation_cpm_x10(stat_sum, elapsed, &ov_cpm);
 	dose = radiation_dose_nsvh(stat_sum, elapsed, gn_config_cal_q16(),
 				   &ov_dose);
+	gm_counter_histogram(&histogram);
 	if (snap_seq < 0xFFFFFFFFUL) {
 		snap_seq++;
 	} else {
@@ -436,7 +460,8 @@ static void native_publish_rates(uint8_t app, uint8_t attempts)
 	snap_app = app;
 	snap_attempts = attempts;
 	twi_slave_publish_native(dose, cpm, native_status(), snap_seq,
-				 gn_config_cal_q16(), stat_sum, elapsed);
+				 gn_config_cal_q16(), stat_sum, elapsed,
+				 &histogram);
 }
 #endif
 
