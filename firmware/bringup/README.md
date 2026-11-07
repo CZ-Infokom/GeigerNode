@@ -822,7 +822,7 @@ not applied. The 190 µs figure is not a software dead time. Confirm the
 anode resistor before the first flash. The JNA DR-M3 comparison has not
 been run. Do not replace 65 from one geometry. Record the source label
 (nuclide, stated rate, distance), a background, and a source window long
-enough to fill the 500 s static register. Keep raw counts from `0x09` as
+enough to fill the 300 s static register. Keep raw counts from `0x09` as
 well as `0x06`. `S_empirical = net_CPM * 60 / net_µR/h`.
 
 Sources consulted 2026-10-05:
@@ -893,7 +893,7 @@ converge.
 
 ## RadSens I2C
 
-The live image is the SBM-20 RadSens slave in `i2c-register-map.md`. Default address `0x66`. Device ID `0x00` is `0x7D`. The firmware version at `0x01` is `0x04`. Hardware TWI0 is the slave. A master write of one byte sets the register pointer. Up to two data bytes after it are applied. The next read, after STOP or a repeated START, starts at that pointer. Bytes inside one read burst increment. Static radiation is `0x06..0x08`, 24-bit big-endian, unit 0.1 µR/h, last 500 s. Dynamic radiation at `0x03..0x05` is the adaptive window under 123 s. Conversion is `µR/h = CPM * 60 / S`, where `S` is the integer at `0x12`. The default is 65. Pulse count at `0x09..0x0A` is 16-bit big-endian and clears when either byte is read. `0x11` starts and stops high voltage. `0x10` and `0x12` are stored across reset until `make flash` erases EEPROM.
+The live image is the SBM-20 RadSens slave in `i2c-register-map.md`. Default address `0x66`. Device ID `0x00` is `0x7D`. The firmware version at `0x01` is `0x04`. Hardware TWI0 is the slave. A master write of one byte sets the register pointer. Up to two data bytes after it are applied. The next read, after STOP or a repeated START, starts at that pointer. Bytes inside one read burst increment. Static radiation is `0x06..0x08`, 24-bit big-endian, unit 0.1 µR/h, last 300 s. Dynamic radiation at `0x03..0x05` is the adaptive window under 123 s. Conversion is `µR/h = CPM * 60 / S`, where `S` is the integer at `0x12`. The default is 65. Pulse count at `0x09..0x0A` is 16-bit big-endian and clears when either byte is read. `0x11` starts and stops high voltage. `0x10` and `0x12` are stored across reset until `make flash` erases EEPROM.
 
 On 2026-10-05 a host read of `0x00` returned `0x00 0x00`, then `0x3B 0xAA` with the source present, and every other address returned those same two bytes. After the first pointer change every address returned `0x00`. That was the high byte of a leftover dose register. A read without a pointer byte now starts at `0x00`. On 2026-10-07 the Flipper bridge read `0x7D 0x01` from `0x00` and `0x8A 0x00` from `0x12` on the previous image. After the next flash:
 

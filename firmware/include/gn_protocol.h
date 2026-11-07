@@ -9,10 +9,13 @@
  */
 
 #define GN_I2C_ADDRESS           0x67U
-#define GN_PROTOCOL_VERSION      1U
+#define GN_PROTOCOL_VERSION      2U
 #define GN_DEVICE_ID             0x474EU
-#define GN_CAPS_VALUE            0x03U
-#define GN_REG_MAP_SIZE          0x1EU
+#define GN_CAPS_DOSE             0x01U
+#define GN_CAPS_RAW              0x02U
+#define GN_CAPS_CONFIG           0x04U
+#define GN_CAPS_VALUE            (GN_CAPS_DOSE | GN_CAPS_RAW | GN_CAPS_CONFIG)
+#define GN_REG_MAP_SIZE          0x22U
 
 #define GN_REG_DEVICE_ID         0x00U
 #define GN_REG_PROTOCOL          0x02U
@@ -24,6 +27,15 @@
 #define GN_REG_CAL               0x12U
 #define GN_REG_COUNT             0x16U
 #define GN_REG_ELAPSED           0x1AU
+#define GN_REG_WINDOW_S          0x1EU
+#define GN_REG_HOLDOFF_US        0x20U
+
+/* Native ring ceiling. The default published window stays five minutes. */
+#define GN_WINDOW_MIN_S          1U
+#define GN_WINDOW_MAX_S          400U
+#define GN_WINDOW_DEFAULT_S      300U
+#define GN_HOLDOFF_MAX_US        300U
+#define GN_HOLDOFF_DEFAULT_US    300U
 
 #define GN_STATUS_VALID          0x0001U
 #define GN_STATUS_WINDOW_FULL    0x0002U

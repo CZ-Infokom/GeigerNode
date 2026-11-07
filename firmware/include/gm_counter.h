@@ -27,16 +27,19 @@ extern const struct gm_tube_profile *const gm_tube_active;
 extern volatile uint32_t system_ms;
 
 /*
- * Exclusive inter-arrival bins. One gap increments exactly one bin.
- * Edges are still counted when the gap is short. Nothing is rejected.
+ * Exclusive inter-arrival bins. One accepted gap increments exactly one bin.
+ * The first GM_CLOSE_LOG accepted gaps below GM_CLOSE_LIMIT_US are stored
+ * in order. Later close gaps stay in the bins only.
  *
- * The first GM_CLOSE_LOG gaps below GM_CLOSE_LIMIT_US are stored in
- * order. Later close gaps stay in the bins only. GM_BLANKING_US is 0:
- * raw and accepted counts are the same until a later image splits them.
+ * After an accepted edge, further falling edges are ignored for the
+ * live holdoff. An ignored edge does not move that stamp. GM_BLANKING_US
+ * is the default and the ceiling: 300 us covers the SBM-20 190 us dead
+ * time and the 151-185 us recovery seen on the earlier tube. Bins and
+ * counts record accepted edges only.
  */
 #define GM_CLOSE_LOG        16U
 #define GM_CLOSE_LIMIT_US   500U
-#define GM_BLANKING_US      0U
+#define GM_BLANKING_US      300U
 
 struct gm_counter_snapshot {
 	uint32_t total_count;
@@ -56,6 +59,9 @@ struct gm_counter_snapshot {
 };
 
 void gm_counter_init(void);
+
+/* 0 accepts every edge. Values above GM_BLANKING_US clamp to that ceiling. */
+void gm_counter_set_blanking_us(uint16_t blanking_us);
 uint16_t gm_tube_nominal_hv_v(void);
 
 /* Whole-number impulses/uR from the active profile, rounded to nearest. */

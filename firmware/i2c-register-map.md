@@ -1,6 +1,6 @@
 # GeigerNode I2C register map (RadSens)
 
-This is the ClimateGuard RadSens map at `0x66`, built with `make PROTOCOL=radsens`. Protocol v1 at `0x67` is `make PROTOCOL=native`; see `geigernode-i2c-protocol.md`.
+This is the ClimateGuard RadSens map at `0x66`, built with `make PROTOCOL=radsens`. Protocol v2 at `0x67` is `make PROTOCOL=native`; see `geigernode-i2c-protocol.md`. The static window on this map stays 300 s. Holdoff stays 300 µs. Neither is a register here.
 
 Slave address `0x66` until a host changes it. Hardware TWI0 is the slave on PC4 (SDA) and PC5 (SCL). The bit-banged image remains on `fallback/bitbang-i2c`.
 
@@ -16,7 +16,7 @@ A master write's first data byte is the register pointer. Up to two data bytes a
 | `0x01` | Firmware version | read | `0x04` |
 | `0x02` | Reserved | read | `0x00` |
 | `0x03`..`0x05` | Dynamic radiation | read | 24-bit big-endian, 0.1 µR/h, adaptive window under 123 s |
-| `0x06`..`0x08` | Static radiation | read | 24-bit big-endian, 0.1 µR/h, last 500 s |
+| `0x06`..`0x08` | Static radiation | read | 24-bit big-endian, 0.1 µR/h, last 300 s |
 | `0x09`..`0x0A` | Pulse count | read | 16-bit big-endian. Cleared by a read of either byte |
 | `0x0B` | HV status | read | Low nibble `0` following the command, `1` cooldown, `2` given up. High nibble is attempts already used |
 | `0x0C` | Low-power control | read/write | `0` or `1`. Default `0`. The bit is stored and does not change voltage, frequency, or counting |
@@ -28,7 +28,7 @@ A master write's first data byte is the register pointer. Up to two data bytes a
 
 ## Radiation
 
-Both radiation values are dose rate. Each second the firmware adds that second's counts. `0x06` keeps the last 500 s. Until 500 s exist, the rate uses only the seconds collected so far.
+Both radiation values are dose rate. Each second the firmware adds that second's counts. `0x06` keeps the last 300 s. Until 300 s exist, the rate uses only the seconds collected so far.
 
 `0x03` keeps a window of 1..122 s. It grows by one second while it is shorter than 122 s. It shrinks to the last 10 s when that slice and the older part differ by more than a factor of two and the busier side has at least 4 counts. ClimateGuard did not publish the thresholds; this is the local approximation of the dynamic window.
 

@@ -22,7 +22,7 @@ _Static_assert(offsetof(struct gm_test_result, state) == 102U, "state is byte 10
 _Static_assert(offsetof(struct gm_test_result, checksum) == 104U, "checksum is byte 104");
 _Static_assert(offsetof(struct gm_test_result, min_interval_us) == 20U,
 	       "min interval is the first diagnostic field");
-_Static_assert(GM_BLANKING_US == 0U, "software dead time stays off");
+_Static_assert(GM_BLANKING_US == 300U, "holdoff trial is 300 us");
 _Static_assert(GM_CLOSE_LOG == 16U, "the log holds 16 close gaps");
 _Static_assert(GM_CLOSE_LIMIT_US == 500U, "the log keeps gaps below 500 us");
 _Static_assert(GM_TEST_EEPROM_ADDR > 178U, "GM record sits past a frequency-series image");

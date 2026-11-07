@@ -7,21 +7,22 @@
 #include "gm_counter.h"
 
 /*
- * Every falling edge is counted. There is no dead time and no debounce.
+ * Accepted falling edges are counted. For the live holdoff after an
+ * accepted edge, further falling edges are ignored and do not move the
+ * stamp. The live value starts at GM_BLANKING_US and never exceeds it.
  * Timer0, prescaler 8, is a 1 us free-running clock. Timer1 stays the HV
  * switcher and Timer2 stays the 1 ms tick. The overflow word plus TCNT0
- * is the stamp. A gap of 0 us is two edges in the same microsecond and
- * still counts, in the <50 us bin.
+ * is the stamp.
  *
- * Bins are exclusive. 2400 Hz switching is 417 us, so that spacing lands
- * in 200–500 us. A repeatable 100–300 us cluster is the tube or the
- * pulse path. Sensitivity is not applied here.
+ * Bins are exclusive and count accepted gaps only. 2400 Hz switching is
+ * 417 us, so that spacing lands in 200–500 us, outside the 300 us holdoff.
+ * Sensitivity is not applied here.
  */
 #if F_CPU != 8000000UL
 #error "The 1 us stamp is calculated for F_CPU=8000000UL"
 #endif
 _Static_assert(F_CPU / 8UL == 1000000UL, "Timer0 prescaler 8 is 1 us");
-_Static_assert(GM_BLANKING_US == 0U, "software dead time stays off");
+_Static_assert(GM_BLANKING_US == 300U, "holdoff trial is 300 us");
 
 const struct gm_tube_profile gm_tube_si29bg __attribute__((used)) = {
 	GM_TUBE_SI29BG_HV_V,
@@ -54,6 +55,7 @@ static volatile uint8_t gm_close_count;
 static volatile uint8_t gm_pulse_seen;
 static volatile uint8_t gm_window_open;
 static volatile uint8_t gm_have_last;
+static volatile uint16_t gm_blanking_us = GM_BLANKING_US;
 
 static inline __attribute__((always_inline)) void gm_bump(volatile uint16_t *bin)
 {
@@ -115,29 +117,37 @@ static inline __attribute__((always_inline)) void gm_bin_interval(uint32_t delta
 ISR(INT0_vect)
 {
 	uint32_t now;
-	uint32_t delta;
+	uint32_t delta = 0;
+	uint8_t had_last;
+
+	now = gm_now_us();
+	had_last = gm_have_last;
+	if (had_last) {
+		delta = now - gm_last_pulse_us;
+		if (delta < gm_blanking_us) {
+			return;
+		}
+	}
 
 	gm_total_count++;
 	gm_pulse_seen = 1;
+	gm_last_pulse_us = now;
+	gm_have_last = 1;
 	if (!gm_window_open) {
 		return;
 	}
 	gm_window_count++;
-	now = gm_now_us();
-	if (gm_have_last) {
-		delta = now - gm_last_pulse_us;
-		if (delta < gm_min_interval_us) {
-			gm_min_interval_us = delta;
-		}
-		gm_bin_interval(delta);
-		if (delta < GM_CLOSE_LIMIT_US && gm_close_count < GM_CLOSE_LOG) {
-			gm_close_us[gm_close_count] = (uint16_t)delta;
-			gm_close_count++;
-		}
-	} else {
-		gm_have_last = 1;
+	if (!had_last) {
+		return;
 	}
-	gm_last_pulse_us = now;
+	if (delta < gm_min_interval_us) {
+		gm_min_interval_us = delta;
+	}
+	gm_bin_interval(delta);
+	if (delta < GM_CLOSE_LIMIT_US && gm_close_count < GM_CLOSE_LOG) {
+		gm_close_us[gm_close_count] = (uint16_t)delta;
+		gm_close_count++;
+	}
 }
 
 uint16_t gm_tube_nominal_hv_v(void)
@@ -150,8 +160,19 @@ uint16_t gm_tube_sensitivity_reg(void)
 	return (uint16_t)((gm_tube_active->sensitivity_imp_per_ur_x10 + 5U) / 10U);
 }
 
+void gm_counter_set_blanking_us(uint16_t blanking_us)
+{
+	if (blanking_us > GM_BLANKING_US) {
+		blanking_us = GM_BLANKING_US;
+	}
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+		gm_blanking_us = blanking_us;
+	}
+}
+
 void gm_counter_init(void)
 {
+	gm_blanking_us = GM_BLANKING_US;
 	gm_total_count = 0;
 	gm_window_count = 0;
 	gm_last_pulse_us = 0;
@@ -206,8 +227,6 @@ void gm_counter_open_window(void)
 		gm_bin_5_10ms = 0;
 		gm_bin_ge_10ms = 0;
 		gm_clear_close();
-		gm_have_last = 0;
-		gm_last_pulse_us = 0;
 		gm_window_open = 1;
 	}
 }

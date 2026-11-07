@@ -89,7 +89,7 @@ endif
 
 # One-shot GM EEPROM test stays in the tree and is not linked.
 SRC := src/main.c src/gpio.c src/gm_counter.c src/adc.c src/hv.c \
-	src/twi_slave.c src/radsens.c src/radiation.c
+	src/twi_slave.c src/radsens.c src/radiation.c src/gn_config.c
 OBJ := $(patsubst src/%.c,$(BIN)/%.o,$(SRC))
 
 ELF := $(BIN)/$(TARGET).elf
@@ -143,7 +143,7 @@ $(BIN):
 $(ELF): $(OBJ) | $(BIN)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ)
 
-$(BIN)/%.o: src/%.c include/board.h include/gpio.h include/gm_counter.h include/gm_test.h include/adc.h include/twi_slave.h include/radsens.h include/radiation.h include/hv.h include/gn_protocol.h | $(BIN)
+$(BIN)/%.o: src/%.c include/board.h include/gpio.h include/gm_counter.h include/gm_test.h include/adc.h include/twi_slave.h include/radsens.h include/radiation.h include/hv.h include/gn_protocol.h include/gn_config.h | $(BIN)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(HEX): $(ELF)

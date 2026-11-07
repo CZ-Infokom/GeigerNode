@@ -30,10 +30,10 @@ static uint8_t pulse_latch_valid;
 #endif
 static uint8_t twi_write_ptr;
 static uint8_t twi_write_len;
-static uint8_t twi_write_data[2];
+static uint8_t twi_write_data[TWI_WRITE_MAX];
 static volatile uint8_t twi_cmd_ptr;
 static volatile uint8_t twi_cmd_len;
-static volatile uint8_t twi_cmd_data[2];
+static volatile uint8_t twi_cmd_data[TWI_WRITE_MAX];
 static volatile uint8_t twi_cmd_ready;
 
 #ifdef GEIGERNODE_PROTOCOL_NATIVE
@@ -63,6 +63,8 @@ static void twi_fill_bank(volatile uint8_t *dest)
 	dest[GN_REG_PROTOCOL] = GN_PROTOCOL_VERSION;
 	dest[GN_REG_CAPS] = GN_CAPS_VALUE;
 	twi_store_u32(&dest[GN_REG_CAL], RADIATION_SBM20_NSVH_PER_CPM_Q16);
+	twi_store_u16(&dest[GN_REG_WINDOW_S], GN_WINDOW_DEFAULT_S);
+	twi_store_u16(&dest[GN_REG_HOLDOFF_US], GN_HOLDOFF_DEFAULT_US);
 }
 
 #else
@@ -177,13 +179,16 @@ static void twi_send_byte(void)
 
 static void twi_commit_write(void)
 {
+	uint8_t i;
+
 	if (twi_write_len == 0U) {
 		return;
 	}
 	twi_cmd_ptr = twi_write_ptr;
 	twi_cmd_len = twi_write_len;
-	twi_cmd_data[0] = twi_write_data[0];
-	twi_cmd_data[1] = twi_write_data[1];
+	for (i = 0; i < twi_write_len; i++) {
+		twi_cmd_data[i] = twi_write_data[i];
+	}
 	twi_cmd_ready = 1;
 	twi_write_len = 0;
 }
@@ -209,7 +214,7 @@ ISR(TWI0_vect)
 		data = TWDR0;
 		if (expect_pointer) {
 			twi_accept_pointer(data);
-		} else if (twi_write_len < 2U) {
+		} else if (twi_write_len < TWI_WRITE_MAX) {
 			twi_write_data[twi_write_len] = data;
 			twi_write_len++;
 		}
@@ -260,6 +265,8 @@ ISR(TWI0_vect)
 
 void twi_slave_init(void)
 {
+	uint8_t i;
+
 	twi_fill_bank(regs[0]);
 	twi_fill_bank(regs[1]);
 	regs_pub = regs[0];
@@ -274,13 +281,13 @@ void twi_slave_init(void)
 #endif
 	twi_write_ptr = 0;
 	twi_write_len = 0;
-	twi_write_data[0] = 0;
-	twi_write_data[1] = 0;
 	twi_cmd_ptr = 0;
 	twi_cmd_len = 0;
-	twi_cmd_data[0] = 0;
-	twi_cmd_data[1] = 0;
 	twi_cmd_ready = 0;
+	for (i = 0; i < TWI_WRITE_MAX; i++) {
+		twi_write_data[i] = 0;
+		twi_cmd_data[i] = 0;
+	}
 
 	/* Pin-change bit-bang stays off. Hardware TWI0 owns PC4/PC5. */
 	PCICR &= (uint8_t)~_BV(PCIE1);
@@ -337,6 +344,19 @@ void twi_slave_set_native_status(uint16_t status)
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
 		twi_store_u16(&regs[0][GN_REG_STATUS], status);
 		twi_store_u16(&regs[1][GN_REG_STATUS], status);
+	}
+}
+
+void twi_slave_set_native_config(uint16_t window_s, uint16_t holdoff_us,
+				 uint32_t cal_q16)
+{
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+		twi_store_u16(&regs[0][GN_REG_WINDOW_S], window_s);
+		twi_store_u16(&regs[1][GN_REG_WINDOW_S], window_s);
+		twi_store_u16(&regs[0][GN_REG_HOLDOFF_US], holdoff_us);
+		twi_store_u16(&regs[1][GN_REG_HOLDOFF_US], holdoff_us);
+		twi_store_u32(&regs[0][GN_REG_CAL], cal_q16);
+		twi_store_u32(&regs[1][GN_REG_CAL], cal_q16);
 	}
 }
 
@@ -426,14 +446,16 @@ void twi_slave_set_lp(uint8_t on)
 uint8_t twi_slave_take_write(struct twi_write_cmd *out)
 {
 	uint8_t ready;
+	uint8_t i;
 
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
 		ready = twi_cmd_ready;
 		if (ready) {
 			out->ptr = twi_cmd_ptr;
 			out->len = twi_cmd_len;
-			out->data[0] = twi_cmd_data[0];
-			out->data[1] = twi_cmd_data[1];
+			for (i = 0; i < TWI_WRITE_MAX; i++) {
+				out->data[i] = twi_cmd_data[i];
+			}
 			twi_cmd_ready = 0;
 		}
 	}

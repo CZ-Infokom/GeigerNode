@@ -7,11 +7,11 @@ This board generates about 400 V. Stay clear of the HV section when the LED is o
 ## Current image
 
 - Tube: SBM-20
-- Native protocol v1 at `0x67`: device ID `0x474E`, CPM × 10 and nSv/h from a 500 s window. Calibration Q16.16 `604948` (65 impulses/µR as nSv/h per CPM)
-- RadSens image at `0x66`: firmware byte `0x01` is `0x04`, sensitivity default 65 impulses/µR
+- Native protocol v2 at `0x67`: device ID `0x474E`, CPM × 10 and nSv/h. Default window 300 s, ceiling 400 s. Calibration Q16.16 `604948` (65 impulses/µR as nSv/h per CPM). Window, holdoff, and calibration are writable.
+- RadSens image at `0x66`: firmware byte `0x01` is `0x04`, sensitivity default 65 impulses/µR, static window fixed at 300 s
 - I2C: hardware TWI0. Bit-bang fallback is `fallback/bitbang-i2c`.
 - Operating point: 380 V at 2400 Hz, 100 µs pulse cap, production abort around 400 V
-- Blanking: 0. Pulse counting does not scale by S.
+- Holdoff: default 300 µs, native range 0..300 µs. Pulse counting does not scale by S.
 - Host: Meshtastic reads native `0x04`..`0x0B`. RadSens masters need `PROTOCOL=radsens`.
 
 The JNA DR-M3 comparison has not been run. Do not replace 65 until that measurement is accepted.

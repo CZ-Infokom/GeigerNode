@@ -8,6 +8,7 @@
 
 #define TWI_SLAVE_ADDRESS GN_I2C_ADDRESS
 #define TWI_REG_COUNT     GN_REG_MAP_SIZE
+#define TWI_WRITE_MAX     4U
 
 #else
 
@@ -28,13 +29,14 @@
 #define TWI_REG_SENSITIVITY      0x12
 #define TWI_REG_LED              0x14
 #define TWI_REG_COUNT            21U
+#define TWI_WRITE_MAX            2U
 
 #endif
 
 struct twi_write_cmd {
 	uint8_t ptr;
 	uint8_t len;
-	uint8_t data[2];
+	uint8_t data[TWI_WRITE_MAX];
 };
 
 void twi_slave_init(void);
@@ -44,10 +46,10 @@ void twi_slave_init(void);
  * ISR. A read with no pointer byte starts at 0x00. 0xA0 does not read
  * TWDR0. TWSTO is written only for a bus error.
  *
- * Native protocol (0x67): the published bank is protocol v1. A read
- * latches the bank so 0x04..0x1D cannot tear. Reads do not clear
- * counters. Writes after the pointer byte are acknowledged and queued
- * for main, which ignores them.
+ * Native protocol (0x67): the published bank is protocol v2. A read
+ * latches the bank so 0x04..0x21 cannot tear. Reads do not clear
+ * counters. A write of 4 bytes at 0x12, or 2 bytes at 0x1E or 0x20,
+ * is queued for main. Any other write is acknowledged and ignored.
  *
  * RadSens (0x66): a host write to 0x10 updates TWAR0 for the next
  * transaction. Radiation values are 24-bit big-endian, 0.1 uR/h. A
@@ -65,6 +67,8 @@ void twi_slave_publish_native(uint32_t dose_nsvh, uint32_t cpm_x10,
 			      uint32_t cal_q16, uint32_t count,
 			      uint32_t elapsed_ms);
 void twi_slave_set_native_status(uint16_t status);
+void twi_slave_set_native_config(uint16_t window_s, uint16_t holdoff_us,
+				 uint32_t cal_q16);
 
 #else
 

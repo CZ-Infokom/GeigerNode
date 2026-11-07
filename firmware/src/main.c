@@ -10,6 +10,9 @@
 #include "radiation.h"
 #include "radsens.h"
 #include "twi_slave.h"
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+#include "gn_config.h"
+#endif
 
 #if F_CPU != 8000000UL
 #error "The 1 ms tick is calculated for F_CPU=8000000UL"
@@ -35,8 +38,9 @@ _Static_assert(RADIATION_RADSENS_MAX == 1440000UL,
 	       "RadSens intensity saturates at 144000.0 uR/h");
 #ifdef GEIGERNODE_PROTOCOL_NATIVE
 _Static_assert(TWI_SLAVE_ADDRESS == 0x67U, "native address is 0x67");
-_Static_assert(TWI_REG_COUNT == 0x1EU, "native map is 30 bytes");
-_Static_assert(GN_PROTOCOL_VERSION == 1U, "protocol version is 1");
+_Static_assert(TWI_REG_COUNT == 0x22U, "native map is 34 bytes");
+_Static_assert(GN_PROTOCOL_VERSION == 2U, "protocol version is 2");
+_Static_assert(GN_CAPS_VALUE == 0x07U, "caps include writable config");
 _Static_assert(RADIATION_SBM20_NSVH_PER_CPM_Q16 == 604948UL,
 	       "SBM-20 Q16.16 is round(600/65*65536)");
 #else
@@ -45,7 +49,15 @@ _Static_assert(TWI_REG_COUNT > TWI_REG_LED, "RadSens map includes 0x14");
 
 #define APP_PRE_HV_MS       500UL
 #define APP_PUBLISH_MS      1000UL
-#define APP_STATIC_S        500U
+/*
+ * History ring. Native can publish the last 1..400 s; the default is
+ * 300 s. RadSens publishes this whole ring, fixed at 300 s.
+ */
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+#define APP_STATIC_MAX      GN_WINDOW_MAX_S
+#else
+#define APP_STATIC_MAX      300U
+#endif
 #define APP_DYNAMIC_MAX     122U
 #define APP_DYNAMIC_RECENT  10U
 #define APP_SHRINK_COUNTS   4U
@@ -64,7 +76,7 @@ _Static_assert(TWI_REG_COUNT > TWI_REG_LED, "RadSens map includes 0x14");
 #define APP_COOLDOWN_BLINK_MS 2000UL
 #define APP_COOLDOWN_ON_MS    100UL
 
-_Static_assert(APP_DYNAMIC_MAX < APP_STATIC_S, "dynamic window fits in the static buffer");
+_Static_assert(APP_DYNAMIC_MAX < APP_STATIC_MAX, "dynamic window fits in the history ring");
 _Static_assert(APP_DYNAMIC_RECENT < APP_DYNAMIC_MAX, "shrink leaves an older slice");
 _Static_assert(APP_ATTEMPTS == 4U, "four HV starts before give-up");
 _Static_assert(APP_COOLDOWN_1_MS < APP_COOLDOWN_2_MS, "first cooldown is shortest");
@@ -81,10 +93,11 @@ _Static_assert(TWI_REG_HV_STATUS == 0x0BU, "HV status is register 0x0B");
 #define APP_IDLE     4U
 #define APP_COOLDOWN 5U
 
-static uint16_t cps_buckets[APP_STATIC_S];
-static uint8_t cps_extra[APP_STATIC_S];
+static uint16_t cps_buckets[APP_STATIC_MAX];
+static uint8_t cps_extra[APP_STATIC_MAX];
 static uint16_t cps_pos;
 static uint16_t cps_len;
+static uint16_t window_s = 300U;
 static uint32_t stat_sum;
 static uint32_t stat_elapsed_ms;
 static uint32_t dyn_sum;
@@ -187,7 +200,7 @@ static void windows_clear(void)
 {
 	uint16_t i;
 
-	for (i = 0; i < APP_STATIC_S; i++) {
+	for (i = 0; i < APP_STATIC_MAX; i++) {
 		cps_buckets[i] = 0;
 		cps_extra[i] = 0;
 	}
@@ -198,6 +211,58 @@ static void windows_clear(void)
 	dyn_sum = 0;
 	dyn_len = 0;
 }
+
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+/*
+ * Shrink drops the oldest seconds from the published sum. Lengthen
+ * pulls older seconds still sitting in the history ring. WINDOW_FULL
+ * follows cps_len >= window_s on the next snapshot.
+ */
+static void window_apply(uint16_t next)
+{
+	uint16_t old_stat;
+	uint16_t new_stat;
+	uint16_t idx;
+	uint16_t n;
+	uint32_t ms;
+
+	if (next < 1U) {
+		next = 1U;
+	}
+	if (next > APP_STATIC_MAX) {
+		next = APP_STATIC_MAX;
+	}
+	if (next == window_s) {
+		return;
+	}
+	old_stat = cps_len < window_s ? cps_len : window_s;
+	new_stat = cps_len < next ? cps_len : next;
+	if (new_stat > old_stat) {
+		n = (uint16_t)(new_stat - old_stat);
+		idx = (uint16_t)((cps_pos + APP_STATIC_MAX - new_stat) %
+				 APP_STATIC_MAX);
+		while (n > 0U) {
+			ms = (uint32_t)APP_PUBLISH_MS + cps_extra[idx];
+			stat_sum += cps_buckets[idx];
+			stat_elapsed_ms += ms;
+			idx = (uint16_t)((idx + 1U) % APP_STATIC_MAX);
+			n--;
+		}
+	} else if (old_stat > new_stat) {
+		n = (uint16_t)(old_stat - new_stat);
+		idx = (uint16_t)((cps_pos + APP_STATIC_MAX - old_stat) %
+				 APP_STATIC_MAX);
+		while (n > 0U) {
+			ms = (uint32_t)APP_PUBLISH_MS + cps_extra[idx];
+			stat_sum -= cps_buckets[idx];
+			stat_elapsed_ms -= ms;
+			idx = (uint16_t)((idx + 1U) % APP_STATIC_MAX);
+			n--;
+		}
+	}
+	window_s = next;
+}
+#endif
 
 static uint32_t sum_recent(uint16_t count)
 {
@@ -210,7 +275,7 @@ static uint32_t sum_recent(uint16_t count)
 	}
 	for (i = 0; i < count; i++) {
 		if (idx == 0U) {
-			idx = APP_STATIC_S;
+			idx = APP_STATIC_MAX;
 		}
 		idx--;
 		sum += cps_buckets[idx];
@@ -240,13 +305,21 @@ static void windows_push(uint16_t delta, uint32_t dt)
 		bucket_ms = (uint16_t)(APP_PUBLISH_MS + extra);
 	}
 
-	if (cps_len == APP_STATIC_S) {
+	/*
+	 * The history ring holds APP_STATIC_MAX seconds. The published
+	 * static window is the newest window_s of those. Overwriting the
+	 * oldest history bucket removes it from the static sum only when
+	 * the published window covers the whole ring. A shorter window
+	 * drops the bucket that just slid out of the newest window_s.
+	 */
+	if (cps_len == APP_STATIC_MAX && window_s >= cps_len) {
 		stat_sum -= cps_buckets[cps_pos];
 		stat_elapsed_ms -= (uint32_t)APP_PUBLISH_MS + cps_extra[cps_pos];
 	}
 	if (dyn_len == APP_DYNAMIC_MAX) {
-		uint16_t drop = (uint16_t)((cps_pos + APP_STATIC_S - APP_DYNAMIC_MAX) %
-					   APP_STATIC_S);
+		uint16_t drop = (uint16_t)((cps_pos + APP_STATIC_MAX -
+					    APP_DYNAMIC_MAX) %
+					   APP_STATIC_MAX);
 
 		dyn_sum -= cps_buckets[drop];
 	}
@@ -255,12 +328,20 @@ static void windows_push(uint16_t delta, uint32_t dt)
 	stat_sum += delta;
 	stat_elapsed_ms += bucket_ms;
 	dyn_sum += delta;
-	cps_pos = (uint16_t)((cps_pos + 1U) % APP_STATIC_S);
-	if (cps_len < APP_STATIC_S) {
+	cps_pos = (uint16_t)((cps_pos + 1U) % APP_STATIC_MAX);
+	if (cps_len < APP_STATIC_MAX) {
 		cps_len++;
 	}
 	if (dyn_len < APP_DYNAMIC_MAX) {
 		dyn_len++;
+	}
+	if (cps_len > window_s) {
+		uint16_t drop = (uint16_t)((cps_pos + APP_STATIC_MAX - window_s -
+					    1U) %
+					   APP_STATIC_MAX);
+
+		stat_sum -= cps_buckets[drop];
+		stat_elapsed_ms -= (uint32_t)APP_PUBLISH_MS + cps_extra[drop];
 	}
 	if (dyn_len <= APP_DYNAMIC_RECENT) {
 		return;
@@ -341,8 +422,7 @@ static void native_publish_rates(uint8_t app, uint8_t attempts)
 	uint32_t elapsed = stat_elapsed_ms;
 
 	cpm = radiation_cpm_x10(stat_sum, elapsed, &ov_cpm);
-	dose = radiation_dose_nsvh(stat_sum, elapsed,
-				   RADIATION_SBM20_NSVH_PER_CPM_Q16,
+	dose = radiation_dose_nsvh(stat_sum, elapsed, gn_config_cal_q16(),
 				   &ov_dose);
 	if (snap_seq < 0xFFFFFFFFUL) {
 		snap_seq++;
@@ -351,13 +431,12 @@ static void native_publish_rates(uint8_t app, uint8_t attempts)
 	}
 	run_has_sample = 1;
 	snap_valid = 1;
-	snap_full = (uint8_t)(cps_len == APP_STATIC_S);
+	snap_full = (uint8_t)(cps_len >= window_s);
 	snap_overflow = (uint8_t)(ov_cpm | ov_dose);
 	snap_app = app;
 	snap_attempts = attempts;
 	twi_slave_publish_native(dose, cpm, native_status(), snap_seq,
-				 RADIATION_SBM20_NSVH_PER_CPM_Q16,
-				 stat_sum, elapsed);
+				 gn_config_cal_q16(), stat_sum, elapsed);
 }
 #endif
 
@@ -515,6 +594,7 @@ int main(void)
 	twi_slave_init();
 	radsens_init();
 #ifdef GEIGERNODE_PROTOCOL_NATIVE
+	window_apply(gn_config_window_s());
 	native_touch_status(APP_DELAY, 0);
 #endif
 	sei();
@@ -524,6 +604,9 @@ int main(void)
 		uint8_t hv_cmd;
 
 		radsens_poll();
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+		window_apply(gn_config_window_s());
+#endif
 		hv_cmd = radsens_hv_command();
 
 		if (app == APP_DELAY) {

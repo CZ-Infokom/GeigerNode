@@ -7,6 +7,9 @@
 #include "radiation.h"
 #include "radsens.h"
 #include "twi_slave.h"
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+#include "gn_config.h"
+#endif
 
 #ifndef GEIGERNODE_PROTOCOL_NATIVE
 /*
@@ -170,6 +173,9 @@ void radsens_init(void)
 	twi_slave_set_lp(0);
 	radsens_publish_radiation(0, 0);
 #endif
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+	gn_config_init();
+#endif
 }
 
 void radsens_poll(void)
@@ -178,7 +184,7 @@ void radsens_poll(void)
 
 	while (twi_slave_take_write(&cmd)) {
 #ifdef GEIGERNODE_PROTOCOL_NATIVE
-		(void)cmd;
+		gn_config_on_write(&cmd);
 #else
 		apply_write(&cmd);
 #endif
