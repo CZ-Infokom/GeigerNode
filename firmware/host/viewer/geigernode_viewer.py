@@ -3,10 +3,11 @@
 
 Reads native protocol v2 at 0x67 or the RadSens map at 0x66, plus the BME680
 at 0x76. RadSens 0x09/0x0A are never read. Register writes stay disabled until
-the warning is accepted, and each write confirms again. A RadSens HV write
-starts or stops 380 V and does not change the setpoint. BME680 measurement
-registers are written for the sensor cycle. Fuses and the programmer port
-are not touched.
+the warning is accepted, and each write confirms again. Native histogram
+clear is write 1 at 0x38; an accepted holdoff write also clears it. A RadSens
+HV write starts or stops 380 V and does not change the setpoint. BME680
+measurement registers are written for the sensor cycle. Fuses and the
+programmer port are not touched.
 """
 
 from __future__ import annotations
@@ -306,6 +307,11 @@ def encode_native_holdoff(microseconds: int) -> bytes:
     if not 0 <= microseconds <= 300:
         raise ValueError("holdoff must be 0..300 µs")
     return bytes([0x20, (microseconds >> 8) & 0xFF, microseconds & 0xFF])
+
+
+def encode_native_histogram_clear() -> bytes:
+    """Pointer 0x38 plus 0x01. Clears bins, shortest gap, and the close log."""
+    return bytes([0x38, 0x01])
 
 
 def encode_radsens_byte(pointer: int, value: int) -> bytes:
@@ -1371,6 +1377,7 @@ class MainWindow(QMainWindow):
         self.write_queue: queue.Queue[RegisterWrite] = queue.Queue()
         self.writes_armed = False
         self.native_writable = False
+        self.write_buttons: list[QPushButton] = []
         self._notice = ""
         self.last_native: Optional[NativeReading] = None
         self.last_radsens: Optional[RadSensReading] = None
@@ -1403,6 +1410,11 @@ class MainWindow(QMainWindow):
         self.histogram = HistogramBars()
         self.histogram.hide()
         meas_layout.addWidget(self.histogram)
+        self.hist_clear_btn = QPushButton("Clear histogram")
+        self.hist_clear_btn.clicked.connect(self._write_histogram_clear)
+        self.hist_clear_btn.hide()
+        self.write_buttons.append(self.hist_clear_btn)
+        meas_layout.addWidget(self.hist_clear_btn)
         fixed_layout.addLayout(self.fixed_form)
         fixed_layout.addWidget(self._build_writes())
         rad_row.addWidget(meas_box, stretch=3)
@@ -1586,8 +1598,6 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         button = QPushButton("Write")
         button.clicked.connect(slot)
-        if not hasattr(self, "write_buttons"):
-            self.write_buttons = []
         self.write_buttons.append(button)
         layout.addWidget(editor, stretch=1)
         layout.addWidget(button)
@@ -1606,6 +1616,7 @@ class MainWindow(QMainWindow):
         self.native_write_box.setVisible(show and self.native_writable)
         if not show:
             self.histogram.hide()
+            self.hist_clear_btn.hide()
 
     def _show_radsens_rows(self, show: bool) -> None:
         self._show_keys(
@@ -1681,7 +1692,9 @@ class MainWindow(QMainWindow):
                 "Writes change the live device.\n\n"
                 "Native v2 stores calibration (0x12, non-zero Q16.16), the static "
                 "window (0x1E, 1..400 s), and the holdoff (0x20, 0..300 µs) in "
-                "EEPROM. A calibration write is not a new accepted tube coefficient.\n\n"
+                "EEPROM. Write 1 at 0x38 to clear the inter-arrival histogram. A "
+                "holdoff write also clears it. A calibration write is not a new "
+                "accepted tube coefficient.\n\n"
                 "RadSens can store a new address and sensitivity. Address 0x76 "
                 "collides with the BME680. The low-power bit and the LED do not "
                 "change the voltage or the count.\n\n"
@@ -1754,11 +1767,23 @@ class MainWindow(QMainWindow):
         if not self._confirm_write(
             f"Write {microseconds} µs to native 0x20. The next accepted edge holds "
             "off further edges for this long. The value is stored in EEPROM. "
-            "Zero counts every falling edge."
+            "Zero counts every falling edge. This also clears the inter-arrival "
+            "histogram."
         ):
             return
         self._enqueue(
             NATIVE_ADDR, encode_native_holdoff(microseconds), f"holdoff {microseconds} µs"
+        )
+
+    def _write_histogram_clear(self) -> None:
+        if not self._confirm_write(
+            "Write 1 to native 0x38. This clears the inter-arrival bins, the "
+            "shortest gap, and the on-chip close log. Dose, CPM, and the count "
+            "window stay. The next accepted edge starts a new histogram."
+        ):
+            return
+        self._enqueue(
+            NATIVE_ADDR, encode_native_histogram_clear(), "histogram clear"
         )
 
     def _write_calibration(self) -> None:
@@ -1938,9 +1963,11 @@ class MainWindow(QMainWindow):
                     n.histogram_bins, n.min_interval_us, n.histogram_saturated
                 )
                 self.histogram.show()
+                self.hist_clear_btn.show()
             else:
                 self.rad_labels["min_gap"].setText(dash())
                 self.histogram.hide()
+                self.hist_clear_btn.hide()
             self.last_native = n
 
         if snap.radsens is not None:

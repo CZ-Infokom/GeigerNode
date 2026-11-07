@@ -41,6 +41,7 @@ _Static_assert(TWI_SLAVE_ADDRESS == 0x67U, "native address is 0x67");
 _Static_assert(TWI_REG_COUNT == 0x39U, "native map is 57 bytes");
 _Static_assert(GN_PROTOCOL_VERSION == 2U, "protocol version is 2");
 _Static_assert(GN_CAPS_VALUE == 0x0FU, "caps include histogram");
+_Static_assert(GN_HISTOGRAM_CLEAR == 0x01U, "histogram clear is write 1 at 0x38");
 _Static_assert(GM_HISTOGRAM_BIN_COUNT == 9U, "nine exclusive bins");
 _Static_assert(RADIATION_SBM20_NSVH_PER_CPM_Q16 == 604948UL,
 	       "SBM-20 Q16.16 is round(600/65*65536)");

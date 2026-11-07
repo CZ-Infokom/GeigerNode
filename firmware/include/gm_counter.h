@@ -89,6 +89,12 @@ uint32_t gm_counter_total(void);
 void gm_counter_snapshot(struct gm_counter_snapshot *out);
 void gm_counter_histogram(struct gm_histogram *out);
 
+/*
+ * Zero the bins, the shortest gap, and the close log. The next accepted
+ * edge starts a new gap series. Window count, total, and holdoff stay.
+ */
+void gm_counter_clear_histogram(void);
+
 /* Returns 1 once after the ISR sees a falling edge, then clears the flag. */
 uint8_t gm_counter_take_pulse(void);
 

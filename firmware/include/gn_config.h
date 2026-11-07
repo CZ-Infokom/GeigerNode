@@ -8,7 +8,8 @@
 /*
  * Native protocol v2 settings. The RadSens image does not call these.
  * Window, holdoff, and calibration survive reset in EEPROM. A blank or
- * bad record uses the defaults. make flash chip-erases EEPROM.
+ * bad record uses the defaults. make flash chip-erases EEPROM. Write 1
+ * at 0x38, or an accepted holdoff write, clears the histogram.
  */
 
 void gn_config_init(void);

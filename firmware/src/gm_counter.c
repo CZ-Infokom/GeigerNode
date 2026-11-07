@@ -74,6 +74,22 @@ static void gm_clear_close(void)
 	gm_close_count = 0;
 }
 
+/* Call with INT0 blocked, or before EIMSK is set. */
+static void gm_zero_histogram(void)
+{
+	gm_min_interval_us = 0xFFFFFFFFUL;
+	gm_bin_lt_50us = 0;
+	gm_bin_50_100us = 0;
+	gm_bin_100_200us = 0;
+	gm_bin_200_500us = 0;
+	gm_bin_500us_1ms = 0;
+	gm_bin_1_2ms = 0;
+	gm_bin_2_5ms = 0;
+	gm_bin_5_10ms = 0;
+	gm_bin_ge_10ms = 0;
+	gm_clear_close();
+}
+
 ISR(TIMER0_OVF_vect)
 {
 	t0_ovf++;
@@ -176,17 +192,7 @@ void gm_counter_init(void)
 	gm_total_count = 0;
 	gm_window_count = 0;
 	gm_last_pulse_us = 0;
-	gm_min_interval_us = 0xFFFFFFFFUL;
-	gm_bin_lt_50us = 0;
-	gm_bin_50_100us = 0;
-	gm_bin_100_200us = 0;
-	gm_bin_200_500us = 0;
-	gm_bin_500us_1ms = 0;
-	gm_bin_1_2ms = 0;
-	gm_bin_2_5ms = 0;
-	gm_bin_5_10ms = 0;
-	gm_bin_ge_10ms = 0;
-	gm_clear_close();
+	gm_zero_histogram();
 	gm_pulse_seen = 0;
 	gm_window_open = 0;
 	gm_have_last = 0;
@@ -216,18 +222,16 @@ void gm_counter_open_window(void)
 {
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
 		gm_window_count = 0;
-		gm_min_interval_us = 0xFFFFFFFFUL;
-		gm_bin_lt_50us = 0;
-		gm_bin_50_100us = 0;
-		gm_bin_100_200us = 0;
-		gm_bin_200_500us = 0;
-		gm_bin_500us_1ms = 0;
-		gm_bin_1_2ms = 0;
-		gm_bin_2_5ms = 0;
-		gm_bin_5_10ms = 0;
-		gm_bin_ge_10ms = 0;
-		gm_clear_close();
+		gm_zero_histogram();
 		gm_window_open = 1;
+	}
+}
+
+void gm_counter_clear_histogram(void)
+{
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+		gm_zero_histogram();
+		gm_have_last = 0;
 	}
 }
 

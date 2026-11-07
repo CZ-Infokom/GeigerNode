@@ -71,6 +71,12 @@ static void cfg_publish(void)
 	gm_counter_set_blanking_us(cfg_holdoff);
 }
 
+static void cfg_clear_histogram(void)
+{
+	gm_counter_clear_histogram();
+	twi_slave_clear_native_histogram();
+}
+
 static void nvm_save(void)
 {
 	struct gn_nvm nvm;
@@ -126,6 +132,12 @@ void gn_config_on_write(const struct twi_write_cmd *cmd)
 	uint16_t value;
 	uint32_t cal;
 
+	if (cmd->ptr == GN_REG_HISTOGRAM_FLAGS && cmd->len == 1U) {
+		if (cmd->data[0] == GN_HISTOGRAM_CLEAR) {
+			cfg_clear_histogram();
+		}
+		return;
+	}
 	if (cmd->ptr == GN_REG_CAL && cmd->len == 4U) {
 		cal = ((uint32_t)cmd->data[0] << 24) |
 		      ((uint32_t)cmd->data[1] << 16) |
@@ -159,6 +171,7 @@ void gn_config_on_write(const struct twi_write_cmd *cmd)
 		cfg_holdoff = value;
 		nvm_save();
 		cfg_publish();
+		cfg_clear_histogram();
 	}
 }
 

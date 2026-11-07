@@ -53,9 +53,9 @@ void twi_slave_init(void);
  * tear, and a concurrent publish updates the other bank.
  *
  * Native protocol (0x67): the published bank is protocol v2. Reads do
- * not clear counters. A write of 4 bytes at 0x12, or 2 bytes at 0x1E
- * or 0x20, is queued for main. Any other write is acknowledged and
- * ignored.
+ * not clear counters. Main applies a 4-byte write at 0x12, a 2-byte
+ * write at 0x1E or 0x20, or a 1-byte write of 0x01 at 0x38. Any other
+ * write is acknowledged and ignored.
  *
  * RadSens (0x66): a host write to 0x10 updates TWAR0 for the next
  * transaction. Radiation values are 24-bit big-endian, 0.1 uR/h. The
@@ -75,6 +75,7 @@ void twi_slave_publish_native(uint32_t dose_nsvh, uint32_t cpm_x10,
 void twi_slave_set_native_status(uint16_t status);
 void twi_slave_set_native_config(uint16_t window_s, uint16_t holdoff_us,
 				 uint32_t cal_q16);
+void twi_slave_clear_native_histogram(void);
 
 #else
 

@@ -44,6 +44,7 @@
 #define GN_REG_HISTOGRAM_FLAGS   0x38U
 
 #define GN_HISTOGRAM_SATURATED   0x01U
+#define GN_HISTOGRAM_CLEAR       0x01U
 
 /* Native ring ceiling. The default published window stays five minutes. */
 #define GN_WINDOW_MIN_S          1U

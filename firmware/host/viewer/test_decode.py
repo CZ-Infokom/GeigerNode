@@ -15,6 +15,7 @@ from geigernode_viewer import (
     decode_native,
     decode_radsens,
     encode_native_calibration,
+    encode_native_histogram_clear,
     encode_native_holdoff,
     encode_native_window,
     encode_radsens_address,
@@ -229,6 +230,7 @@ class RegisterWriteTest(unittest.TestCase):
     def test_native_and_radsens_payloads(self) -> None:
         self.assertEqual(encode_native_window(300), bytes.fromhex("1E012C"))
         self.assertEqual(encode_native_holdoff(300), bytes.fromhex("20012C"))
+        self.assertEqual(encode_native_histogram_clear(), bytes.fromhex("3801"))
         self.assertEqual(encode_native_calibration(604948), bytes.fromhex("1200093B14"))
         self.assertEqual(encode_radsens_sensitivity(65), bytes.fromhex("124100"))
         self.assertEqual(encode_radsens_address(0x66), bytes.fromhex("1066"))

@@ -16,7 +16,7 @@ HV still starts after 500 ms. Native v2 has no host HV-off register. Stay clear 
 | --- | --- | --- |
 | `0x00`..`0x01` | uint16 | Device ID `0x474E` ("GN") |
 | `0x02` | uint8 | Protocol version `2` |
-| `0x03` | uint8 | Capabilities `0x0F` (bit 0 = CPM/nSv/h, bit 1 = raw count + elapsed, bit 2 = writable window, holdoff, and calibration, bit 3 = inter-arrival histogram) |
+| `0x03` | uint8 | Capabilities `0x0F` (bit 0 = CPM/nSv/h, bit 1 = raw count + elapsed, bit 2 = writable window, holdoff, calibration, and histogram clear, bit 3 = inter-arrival histogram) |
 | `0x04`..`0x07` | uint32 | Estimated dose rate, nSv/h |
 | `0x08`..`0x0B` | uint32 | Count rate, CPM × 10 |
 | `0x0C`..`0x0D` | uint16 | Measurement and HV status |
@@ -36,9 +36,9 @@ HV still starts after 500 ms. Native v2 has no host HV-off register. Stay clear 
 | `0x32`..`0x33` | uint16 | Gaps 2–5 ms |
 | `0x34`..`0x35` | uint16 | Gaps 5–10 ms |
 | `0x36`..`0x37` | uint16 | Gaps 10 ms and above |
-| `0x38` | uint8 | Histogram flags. Bit 0 set when any bin is at 65535 |
+| `0x38` | uint8 | Histogram flags. Bit 0 set when any bin is at 65535. Write `01` to clear |
 
-Writes into `0x22`..`0x38` are acknowledged and ignored.
+Writes into `0x22`..`0x37` are acknowledged and ignored. A 1-byte write of `01` at `0x38` clears the histogram. Other values and a short write at `0x38` are ignored.
 
 ## Status `0x0C`..`0x0D`
 
@@ -86,7 +86,7 @@ Host absence does not enlarge the window. After the configured window is full, e
 
 ## Inter-arrival histogram
 
-The nine bins and the shortest gap count accepted gaps since `gm_counter_open_window()` at the start of this RUN. They are not the rolling dose window at `0x16`. After that window fills, or after a host shortens it, the two numbers describe different spans. The first accepted edge has no gap, so the bin sum is one behind the RUN pulse count until a bin saturates. Changing the window or the holdoff does not clear the bins. The default 300 µs holdoff drops shorter edges, so the bins under 300 µs stay empty until a host writes a shorter holdoff. Each bin saturates at 65535 and sets bit 0 of `0x38`. That flag does not set dose `OVERFLOW`.
+The nine bins and the shortest gap count accepted gaps since `gm_counter_open_window()` at the start of this RUN, or since a histogram clear. They are not the rolling dose window at `0x16`. After that window fills, or after a host shortens it, the two numbers describe different spans. The first accepted edge has no gap, so the bin sum is one behind the RUN pulse count until a bin saturates or the histogram is cleared. Changing the window does not clear the bins. A holdoff write that is accepted, or a write of `01` at `0x38`, zeros the bins, the shortest gap, and the on-chip close log. Dose, CPM, and the count window stay. The next accepted edge starts a new gap series. The default 300 µs holdoff drops shorter edges, so the bins under 300 µs stay empty until a host writes a shorter holdoff. Each bin saturates at 65535 and sets bit 0 of `0x38`. That flag does not set dose `OVERFLOW`.
 
 ## Writes
 
@@ -96,9 +96,10 @@ A write is the pointer byte plus the value bytes. Short writes and out-of-range 
 | --- | --- | --- | --- |
 | `0x12` | 4 | non-zero Q16.16, big-endian | calibration. Zero is ignored |
 | `0x1E` | 2 | seconds, 1..400, big-endian | static window |
-| `0x20` | 2 | microseconds, 0..300, big-endian | holdoff |
+| `0x20` | 2 | microseconds, 0..300, big-endian | holdoff. Also clears the histogram |
+| `0x38` | 1 | `01` | clear the inter-arrival histogram |
 
-The window and holdoff registers update when the write is accepted. Dose, CPM, count, and elapsed use the new window on the next one-second snapshot. Shrinking drops the oldest seconds. Lengthening keeps seconds still in the 400 s history and leaves `WINDOW_FULL` clear until the new length is filled. Holdoff applies to the next edge. Zero holdoff counts every falling edge.
+The window and holdoff registers update when the write is accepted. Dose, CPM, count, and elapsed use the new window on the next one-second snapshot. Shrinking drops the oldest seconds. Lengthening keeps seconds still in the 400 s history and leaves `WINDOW_FULL` clear until the new length is filled. Holdoff applies to the next edge. Zero holdoff counts every falling edge. An accepted holdoff write clears the histogram immediately, same as `0x38`. A same-value holdoff write is ignored and does not clear.
 
 Accepted settings are stored in EEPROM with magic `0xC3`. A blank or bad record loads the defaults. `make flash` chip-erases EEPROM, so a freshly flashed board returns to 300 s, 300 µs, and `604948`. The RadSens image uses the same EEPROM address with a different magic and does not read this record.
 
@@ -122,9 +123,10 @@ x 67 02 / 1
 x 67 04 / 8
 x 67 00 / 32
 x 67 20 / 25
+w 67 38 01
 x 76 D0 / 1
 ```
 
 That bridge accepts at most 32 bytes in one transfer. The 57-byte map is `x 67 00 / 32`, then `x 67 20 / 25`. Each command writes the pointer first.
 
-A scan lists `0x67` and `0x76`. `x 67 00 / 2` returns `47 4E`. `x 67 02 / 1` returns `02`. `x 76 D0 / 1` returns `61`. Writing `00 09 3B 14` at `0x12` stores the default calibration.
+A scan lists `0x67` and `0x76`. `x 67 00 / 2` returns `47 4E`. `x 67 02 / 1` returns `02`. `x 76 D0 / 1` returns `61`. Writing `00 09 3B 14` at `0x12` stores the default calibration. `w 67 38 01` clears the histogram.

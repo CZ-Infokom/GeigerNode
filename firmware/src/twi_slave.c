@@ -395,6 +395,21 @@ void twi_slave_set_native_config(uint16_t window_s, uint16_t holdoff_us,
 	}
 }
 
+void twi_slave_clear_native_histogram(void)
+{
+	volatile uint8_t *dest;
+	uint8_t i;
+
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+		dest = twi_begin_update();
+		twi_store_u32(&dest[GN_REG_MIN_INTERVAL], 0xFFFFFFFFUL);
+		for (i = GN_REG_BIN_LT_50US; i <= GN_REG_HISTOGRAM_FLAGS; i++) {
+			dest[i] = 0;
+		}
+		regs_pub = dest;
+	}
+}
+
 #else
 
 void twi_slave_publish_radiation(uint32_t dynamic_x10, uint32_t static_x10)
