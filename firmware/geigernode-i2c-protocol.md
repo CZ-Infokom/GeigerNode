@@ -29,10 +29,10 @@ HV still starts after 500 ms. Native v2 has no host HV-off register. Stay clear 
 | `0x22`..`0x25` | uint32 | Shortest accepted gap this RUN, µs. `0xFFFFFFFF` until the second accepted edge |
 | `0x26`..`0x37` | 9 × uint16 | Exclusive inter-arrival bins. Holdoff 0 is under 50 µs, 50–100, 100–200, 200–500, 500 µs–1 ms, 1–2 ms, 2–5 ms, 5–10 ms, 10 ms and above. Any other holdoff starts bin 0 at that holdoff and stretches those eight upper bounds onto `[holdoff, 10000]` µs. Last bin stays 10 ms and above |
 | `0x38` | uint8 | Histogram flags. Bit 0 set when any bin is at 65535. Write `01` to clear |
-| `0x39` | uint8 | Firmware major. `0` for `0.2.1-beta.4` |
+| `0x39` | uint8 | Firmware major. `0` for `0.2.1` |
 | `0x3A` | uint8 | Firmware minor. `2` |
 | `0x3B` | uint8 | Firmware patch. `1` |
-| `0x3C` | uint8 | Pre-release. `0` is a release. `4` is `beta.4` |
+| `0x3C` | uint8 | Pre-release. `0` is a release. This image is `0` |
 | `0x3D` | uint8 | Reserved. Reads `0`. Writes are ignored |
 | `0x3E`..`0x3F` | uint16 | Peak span, seconds. Read/write. Range 10..60. Default 10 |
 | `0x40`..`0x43` | uint32 | Window maximum, CPM × 10. Busiest full peak-span slice still inside the dose window |
@@ -154,6 +154,6 @@ w 67 38 01
 x 76 D0 / 1
 ```
 
-That bridge accepts at most 32 bytes in one transfer. The 80-byte map is `x 67 00 / 32`, then `x 67 20 / 32`, then `x 67 40 / 16`. Each command writes the pointer first. The third span covers both latched peak registers and resets them. `0x39`..`0x3C` on this image is `00 02 01 04`.
+That bridge accepts at most 32 bytes in one transfer. The 80-byte map is `x 67 00 / 32`, then `x 67 20 / 32`, then `x 67 40 / 16`. Each command writes the pointer first. The third span covers both latched peak registers and resets them. `0x39`..`0x3C` on this image is `00 02 01 00`.
 
 A scan lists `0x67` and `0x76`. `x 67 00 / 2` returns `47 4E`. `x 67 02 / 1` returns `02`. `x 76 D0 / 1` returns `61`. Writing `00 09 3B 14` at `0x12` stores the default calibration. `w 67 38 01` clears the histogram. Writing `00 0A` at `0x3E` stores a 10 s peak span.

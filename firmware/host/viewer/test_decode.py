@@ -12,6 +12,7 @@ from geigernode_viewer import (
     Snapshot,
     calc_gas_resistance,
     calc_temperature,
+    chart_legend_items,
     decode_native,
     decode_radsens,
     encode_native_calibration,
@@ -30,6 +31,7 @@ from geigernode_viewer import (
     histogram_edges,
     nearest_point,
     nice_limits,
+    series_bounds,
     y_axis_limits,
     read_spans,
     record_snapshot,
@@ -140,11 +142,11 @@ class NativeDecodeTest(unittest.TestCase):
         bank[0:2] = bytes.fromhex("474E")
         bank[2] = 0x02
         bank[3] = 0x0F
-        bank[0x39:0x3D] = bytes((0, 2, 1, 4))
+        bank[0x39:0x3D] = bytes((0, 2, 1, 0))
         n = decode_native(bytes(bank))
-        self.assertEqual(n.fw_version, (0, 2, 1, 4))
-        self.assertEqual(format_fw_version(*n.fw_version), "0.2.1-beta.4")
-        self.assertEqual(format_fw_version(0, 2, 1, 0), "0.2.1")
+        self.assertEqual(n.fw_version, (0, 2, 1, 0))
+        self.assertEqual(format_fw_version(*n.fw_version), "0.2.1")
+        self.assertEqual(format_fw_version(0, 2, 1, 4), "0.2.1-beta.4")
         bank[0x39:0x3D] = b"\xff\xff\xff\xff"
         self.assertIsNone(decode_native(bytes(bank)).fw_version)
 
@@ -153,7 +155,7 @@ class NativeDecodeTest(unittest.TestCase):
         bank[0:2] = bytes.fromhex("474E")
         bank[2] = 0x02
         bank[3] = 0x1F
-        bank[0x39:0x3D] = bytes((0, 2, 1, 4))
+        bank[0x39:0x3D] = bytes((0, 2, 1, 0))
         bank[0x3E:0x40] = (10).to_bytes(2, "big")
         bank[0x40:0x44] = (600).to_bytes(4, "big")
         bank[0x44:0x48] = (1200).to_bytes(4, "big")
@@ -171,7 +173,7 @@ class NativeDecodeTest(unittest.TestCase):
         short[0:2] = bytes.fromhex("474E")
         short[2] = 0x02
         short[3] = 0x1F
-        short[0x39:0x3D] = bytes((0, 2, 1, 4))
+        short[0x39:0x3D] = bytes((0, 2, 1, 0))
         n = decode_native(bytes(short))
         self.assertFalse(n.has_peaks)
         self.assertIsNone(n.peak_win_cpm_x10)
@@ -349,6 +351,30 @@ class RegisterWriteTest(unittest.TestCase):
         self.assertIn("min_gap_us,151", text)
 
 
+class ChartLegendTest(unittest.TestCase):
+    def test_single_trace_has_no_toggle(self) -> None:
+        self.assertIsNone(
+            chart_legend_items(
+                [("temperature_c", "BME680")],
+                {"temperature_c"},
+                set(),
+            )
+        )
+
+    def test_multi_trace_hides_and_keeps_the_label(self) -> None:
+        traces = [("cpm", "native"), ("peak_win_cpm", "window peak"), ("peak_latch_cpm", "latched peak")]
+        shown = chart_legend_items(traces, {"cpm", "peak_win_cpm"}, set())
+        self.assertEqual(
+            [(name, drawn) for name, _label, drawn in shown],
+            [("cpm", True), ("peak_win_cpm", True)],
+        )
+        hidden = chart_legend_items(traces, {"cpm", "peak_win_cpm"}, {"peak_win_cpm"})
+        self.assertEqual(
+            [(name, drawn) for name, _label, drawn in hidden],
+            [("cpm", True), ("peak_win_cpm", False)],
+        )
+
+
 class CursorTest(unittest.TestCase):
     def test_nearest_sample_and_axis_mapping(self) -> None:
         points = [(0.0, 1.0), (10.0, 2.0), (20.0, 4.0)]
@@ -379,7 +405,16 @@ class CursorTest(unittest.TestCase):
         self.assertAlmostEqual(lo, 21.0)
         self.assertAlmostEqual(hi, 23.0)
         self.assertAlmostEqual(step, 0.5)
-        self.assertEqual(nice_limits(0, 90, time=True), (0, 120, 30))
+
+    def test_time_axis_uses_the_actual_span(self) -> None:
+        series = [("cpm", None, [(0.0, 1.0), (37.0, 2.0), (90.0, 4.0)])]
+        xmin, xmax, _ymin, _ymax = series_bounds(series)
+        self.assertEqual(xmin, 0.0)
+        self.assertEqual(xmax, 90.0)
+        wrapped = [("cpm", None, [(100.0, 1.0), (190.0, 2.0)])]
+        xmin, xmax, _ymin, _ymax = series_bounds(wrapped)
+        self.assertEqual(xmin, 100.0)
+        self.assertEqual(xmax, 190.0)
 
     def test_y_axis_snaps_a_near_zero_end(self) -> None:
         self.assertEqual(y_axis_limits(2, 37), (0, 40, 10))

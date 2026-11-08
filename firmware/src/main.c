@@ -41,8 +41,8 @@ _Static_assert(TWI_SLAVE_ADDRESS == 0x67U, "native address is 0x67");
 _Static_assert(TWI_REG_COUNT == 0x50U, "native map is 80 bytes");
 _Static_assert(GN_PROTOCOL_VERSION == 2U, "protocol version is 2");
 _Static_assert(GN_FW_MAJOR == 0U && GN_FW_MINOR == 2U &&
-	       GN_FW_PATCH == 1U && GN_FW_PRE == 4U,
-	       "firmware version is 0.2.1-beta.4");
+	       GN_FW_PATCH == 1U && GN_FW_PRE == 0U,
+	       "firmware version is 0.2.1");
 _Static_assert(GN_CAPS_VALUE == 0x1FU, "caps include peaks");
 _Static_assert(GN_HISTOGRAM_CLEAR == 0x01U, "histogram clear is write 1 at 0x38");
 _Static_assert(GM_HISTOGRAM_BIN_COUNT == 9U, "nine exclusive bins");

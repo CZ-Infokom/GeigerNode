@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import serial
-from PyQt6.QtCore import Qt, QPointF, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QPointF, QRect, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPalette, QPen
 from PyQt6.QtWidgets import (
     QApplication,
@@ -324,7 +324,7 @@ def decode_native(data: bytes) -> NativeReading:
 
 
 def format_fw_version(major: int, minor: int, patch: int, pre: int) -> str:
-    """0.2.1-beta.4 when pre is 4. Pre-release 0 is a release."""
+    """0.2.1-beta.4 when pre is 4. Pre-release 0 is a release, shown as 0.2.1."""
     text = f"{major}.{minor}.{patch}"
     if pre:
         text += f"-beta.{pre}"
@@ -1127,12 +1127,11 @@ def record_snapshot(history: SampleHistory, snap: Snapshot, when: Optional[float
 # Four equal intervals. 4 and 5 (and 0.4 / 0.5) are the mantissas; 1 and 2
 # keep the next larger ceiling from jumping a whole decade.
 _NICE_MANTISSA = (1, 2, 4, 5)
-_TIME_STEPS = (15, 30, 60, 120, 300, 600, 900, 1800, 3600)
 # A Y end closer to zero than this fraction of the far end is pinned to 0.
 Y_ZERO_SNAP = 0.20
 
 
-def _candidate_steps(raw: float, extra: tuple[float, ...] = ()) -> list[float]:
+def _candidate_steps(raw: float) -> list[float]:
     if raw <= 0:
         raw = 1.0
     exp = math.floor(math.log10(raw))
@@ -1141,7 +1140,6 @@ def _candidate_steps(raw: float, extra: tuple[float, ...] = ()) -> list[float]:
         for e in range(exp, exp + 4)
         for mant in _NICE_MANTISSA
     ]
-    steps.extend(extra)
     chosen: list[float] = []
     for step in sorted(steps):
         if step < raw - 1e-9 * max(raw, 1.0):
@@ -1156,35 +1154,30 @@ def _snap_floor(value: float, step: float) -> float:
     return math.floor(value / step + 1e-8) * step
 
 
-def nice_limits(
-    lo: float, hi: float, *, time: bool = False
-) -> tuple[float, float, float]:
+def nice_limits(lo: float, hi: float) -> tuple[float, float, float]:
     """Snap a span to four equal steps of 1, 2, 4, or 5 times a power of ten.
 
-    Time also accepts 15 s, 30 s, 1 min, and the longer clock steps when one
-    of those is the nearest larger fit. A value of 0 stays on 0. A narrow
-    band is not pulled down to 0.
+    A value of 0 stays on 0. A narrow band is not pulled down to 0.
     """
     if hi < lo:
         lo, hi = hi, lo
-    extra = _TIME_STEPS if time else ()
     span = hi - lo
     if span <= 0:
-        step = _candidate_steps(abs(lo) * 0.05 or 1.0, extra)[0]
+        step = _candidate_steps(abs(lo) * 0.05 or 1.0)[0]
         ymin = _snap_floor(lo, step)
         if lo >= 0 and ymin < 0:
             ymin = 0.0
         return ymin, ymin + 4 * step, step
     raw = span / 4.0
     scale = max(1.0, abs(lo), abs(hi))
-    for step in _candidate_steps(raw, extra):
+    for step in _candidate_steps(raw):
         ymin = _snap_floor(lo, step)
         if lo >= 0 and ymin < 0:
             ymin = 0.0
         ymax = ymin + 4 * step
         if ymin <= lo + 1e-8 * scale and ymax >= hi - 1e-8 * scale:
             return ymin, ymax, step
-    step = _candidate_steps(raw, extra)[-1]
+    step = _candidate_steps(raw)[-1]
     ymin = 0.0 if lo >= 0 else _snap_floor(lo, step)
     return ymin, ymin + 4 * step, step
 
@@ -1251,7 +1244,9 @@ CHART_MARGIN = (56, 24, 12, 22)
 def series_bounds(series: list[tuple[str, object, list[tuple[float, float]]]]) -> tuple[float, float, float, float]:
     xs = [p[0] for _, _, pts in series for p in pts]
     ys = [p[1] for _, _, pts in series for p in pts]
-    xmin, xmax, _ = nice_limits(min(xs), max(xs), time=True)
+    # Time is the samples' own elapsed span. The right edge is the newest
+    # sample, so the trace runs out to the actual maximum.
+    xmin, xmax = min(xs), max(xs)
     ymin, ymax, _ = y_axis_limits(min(ys), max(ys))
     return xmin, xmax, ymin, ymax
 
@@ -1323,6 +1318,27 @@ def x_from_time(
     return plot_left + (t - xmin) / (xmax - xmin) * plot_width
 
 
+def chart_legend_items(
+    traces: list[tuple[str, str]],
+    present: set[str],
+    hidden: set[str],
+) -> Optional[list[tuple[str, str, bool]]]:
+    """Clickable legend rows, or None when the chart has a single trace.
+
+    Each row is (series name, label, drawn). A hidden trace stays listed so
+    it can be turned back on. A trace with no samples stays off the legend
+    until it has points.
+    """
+    if len(traces) <= 1:
+        return None
+    items: list[tuple[str, str, bool]] = []
+    for name, legend in traces:
+        drawn = name not in hidden
+        if name in present or not drawn:
+            items.append((name, legend, drawn))
+    return items
+
+
 class HistoryChart(QWidget):
     """One line chart over SampleHistory. Traces with no points are omitted."""
 
@@ -1336,6 +1352,8 @@ class HistoryChart(QWidget):
         self.show_readout = False
         self.log_x = False
         self.hover_callback = None
+        self._hidden: set[str] = set()
+        self._legend_hits: list[tuple[QRect, str]] = []
         self.setMinimumHeight(120)
         self.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -1345,15 +1363,43 @@ class HistoryChart(QWidget):
     def set_history(self, history: SampleHistory) -> None:
         self.history = history
 
+    def _trace_color(self, name: str) -> QColor:
+        for series_name, _legend, color in self.traces:
+            if series_name == name:
+                return color
+        return QColor("#888888")
+
+    def _legend_rows(self) -> Optional[list[tuple[str, str, bool]]]:
+        present: set[str] = set()
+        if self.history is not None:
+            present = {
+                name
+                for name, _legend, _color in self.traces
+                if self.history.points(name)
+            }
+        return chart_legend_items(
+            [(name, legend) for name, legend, _color in self.traces],
+            present,
+            self._hidden,
+        )
+
     def _visible_series(self) -> list[tuple[str, QColor, list[tuple[float, float]]]]:
         series = []
         if self.history is None:
             return series
         for name, legend, color in self.traces:
+            if name in self._hidden:
+                continue
             pts = self.history.points(name)
             if pts:
                 series.append((legend, color, pts))
         return series
+
+    def _legend_at(self, pos) -> Optional[str]:
+        for rect, name in self._legend_hits:
+            if rect.contains(pos.toPoint()):
+                return name
+        return None
 
     def _plot_rect(self):
         left, top, right, bottom = CHART_MARGIN
@@ -1373,6 +1419,9 @@ class HistoryChart(QWidget):
         return snapped[0]
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._legend_at(event.position()) is not None:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            return
         t = self._time_at(event.position().x())
         if self.hover_callback is not None:
             self.hover_callback(self, t)
@@ -1383,6 +1432,18 @@ class HistoryChart(QWidget):
         self.setCursor(
             Qt.CursorShape.CrossCursor if t is not None else Qt.CursorShape.ArrowCursor
         )
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        name = self._legend_at(event.position())
+        if name is None:
+            return
+        if name in self._hidden:
+            self._hidden.remove(name)
+        else:
+            self._hidden.add(name)
+        self.update()
 
     def leaveEvent(self, event) -> None:  # noqa: N802
         del event
@@ -1403,6 +1464,7 @@ class HistoryChart(QWidget):
         fg = palette.color(QPalette.ColorRole.Text)
         painter.setPen(fg)
         painter.drawText(8, 16, self.title)
+        self._legend_hits = []
 
         plot = self._plot_rect()
         if plot.width() < 10 or plot.height() < 10:
@@ -1410,8 +1472,12 @@ class HistoryChart(QWidget):
             return
 
         series = self._visible_series()
+        legend_rows = self._legend_rows()
         if not series:
-            painter.drawText(plot, Qt.AlignmentFlag.AlignCenter, "waiting for samples")
+            note = "traces hidden" if self._hidden else "waiting for samples"
+            painter.drawText(plot, Qt.AlignmentFlag.AlignCenter, note)
+            if legend_rows:
+                self._paint_legend(painter, plot, legend_rows)
             painter.end()
             return
 
@@ -1484,12 +1550,12 @@ class HistoryChart(QWidget):
                 painter.drawEllipse(map_point(sample_t, value), 3.5, 3.5)
             painter.setBrush(Qt.BrushStyle.NoBrush)
 
-        legend_x = plot.left() + 6
-        painter.setPen(fg)
-        for legend, color, _pts in series:
-            painter.setPen(color)
-            painter.drawText(legend_x, plot.top() + 12, legend)
-            legend_x += painter.fontMetrics().horizontalAdvance(legend) + 14
+        if legend_rows is None:
+            self._paint_plain_legend(
+                painter, plot, [(legend, color) for legend, color, _pts in series]
+            )
+        else:
+            self._paint_legend(painter, plot, legend_rows)
 
         if self.show_readout and cursor_samples:
             lines = [format_elapsed_precise(self.cursor_t)]
@@ -1514,6 +1580,43 @@ class HistoryChart(QWidget):
                 text_y += metrics.height()
 
         painter.end()
+
+    def _paint_plain_legend(self, painter: QPainter, plot, items: list[tuple[str, QColor]]) -> None:
+        legend_x = plot.left() + 6
+        for legend, color in items:
+            painter.setPen(color)
+            painter.drawText(legend_x, plot.top() + 12, legend)
+            legend_x += painter.fontMetrics().horizontalAdvance(legend) + 14
+
+    def _paint_legend(
+        self,
+        painter: QPainter,
+        plot,
+        rows: list[tuple[str, str, bool]],
+    ) -> None:
+        """Draw clickable labels. A hidden trace is struck through."""
+        legend_x = plot.left() + 6
+        metrics = painter.fontMetrics()
+        baseline = plot.top() + 12
+        top = baseline - metrics.ascent()
+        for name, legend, drawn in rows:
+            color = self._trace_color(name)
+            if not drawn:
+                color = QColor(color)
+                color.setAlpha(110)
+            font = painter.font()
+            font.setStrikeOut(not drawn)
+            painter.setFont(font)
+            painter.setPen(color)
+            painter.drawText(legend_x, baseline, legend)
+            width = metrics.horizontalAdvance(legend)
+            self._legend_hits.append(
+                (QRect(legend_x - 2, top - 1, width + 4, metrics.height() + 2), name)
+            )
+            legend_x += width + 14
+        font = painter.font()
+        font.setStrikeOut(False)
+        painter.setFont(font)
 
 
 # ---------------------------------------------------------------------------

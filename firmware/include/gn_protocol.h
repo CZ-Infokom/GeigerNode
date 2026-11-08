@@ -8,7 +8,7 @@
  * Map: firmware/geigernode-i2c-protocol.md
  *
  * GN_PROTOCOL_VERSION is the map. GN_FW_* is this firmware image,
- * 0.2.1-beta.4. Pre-release 0 is a release build.
+ * 0.2.1. Pre-release 0 is a release build.
  */
 
 #define GN_I2C_ADDRESS           0x67U
@@ -16,7 +16,7 @@
 #define GN_FW_MAJOR              0U
 #define GN_FW_MINOR              2U
 #define GN_FW_PATCH              1U
-#define GN_FW_PRE                4U
+#define GN_FW_PRE                0U
 #define GN_DEVICE_ID             0x474EU
 #define GN_CAPS_DOSE             0x01U
 #define GN_CAPS_RAW              0x02U
