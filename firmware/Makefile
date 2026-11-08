@@ -69,6 +69,10 @@ ifeq ($(PROTOCOL),native)
 CFLAGS += -DGEIGERNODE_PROTOCOL_NATIVE
 endif
 
+# CI sets EXTRA_CFLAGS=-Werror. A bench build leaves warnings as warnings.
+EXTRA_CFLAGS ?=
+CFLAGS += $(EXTRA_CFLAGS)
+
 LDFLAGS := -mmcu=$(MCU) -Wl,--gc-sections
 
 AVRDUDE_FLAGS := -C $(AVRDUDE_CONF) -p $(AVRDUDE_MCU) -c $(PROGRAMMER) -P $(PORT)
@@ -101,13 +105,14 @@ LST := $(BIN)/$(TARGET).lst
 all: $(HEX) size
 
 HOSTCC ?= gcc
+EXTRA_HOST_CFLAGS ?=
 MATH_TEST := $(BIN)/radiation_math_test
 
 math-test: $(MATH_TEST)
 	$(MATH_TEST)
 
 $(MATH_TEST): host/radiation_math_test.c src/radiation.c include/radiation.h | $(BIN)
-	$(HOSTCC) -std=c11 -Wall -Wextra -Wshadow -Iinclude -o $@ \
+	$(HOSTCC) -std=c11 -Wall -Wextra -Wshadow -Iinclude $(EXTRA_HOST_CFLAGS) -o $@ \
 		host/radiation_math_test.c src/radiation.c
 
 # Hardware TWI0 proof of concept (issue #3). Separate image: HV off, fixed

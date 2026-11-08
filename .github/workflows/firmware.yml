@@ -1,0 +1,193 @@
+# Lint and test on pull requests and on dev/master pushes.
+# A version tag also builds the Flipper release files and publishes a GitHub release.
+# vMAJOR.MINOR.PATCH is a release. A SemVer pre-release suffix
+# (-beta, -rc, -pre, -alpha, and any other -identifier) is a pre-release.
+# The .avr descriptors name the approved fuses. This workflow does not call avrdude.
+
+name: Firmware
+
+on:
+  push:
+    branches:
+      - dev
+      - master
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Ruff
+        run: |
+          python -m pip install --disable-pip-version-check ruff==0.17.4
+          ruff check firmware
+
+  check:
+    name: Check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host test packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pyqt6 python3-serial
+
+      - name: Host math test
+        run: make -C firmware math-test EXTRA_HOST_CFLAGS=-Werror
+
+      - name: Viewer decode tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python3 firmware/host/viewer/test_decode.py
+
+      - name: Release asset tests
+        run: python3 firmware/tools/test_release_assets.py
+
+  build:
+    name: Build
+    needs: [lint, check]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require a version tag
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: python3 firmware/tools/release_assets.py classify "$TAG"
+
+      - name: Cache AVR toolchain
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/avr8-gnu-toolchain-4.0.0.52-linux.any.x86_64.tar.gz
+          key: avr8-4.0.0.52-cc8682bb15f26428597499bf6e120832624a25b1062034a49fe0c77e4731cd33
+
+      - name: Install AVR toolchain 4.0.0
+        env:
+          TOOLCHAIN_URL: https://ww1.microchip.com/downloads/aemDocuments/documents/DEV/ProductDocuments/SoftwareTools/avr8-gnu-toolchain-4.0.0.52-linux.any.x86_64.tar.gz
+          TOOLCHAIN_SHA256: cc8682bb15f26428597499bf6e120832624a25b1062034a49fe0c77e4731cd33
+        run: |
+          set -euo pipefail
+          tarball="${RUNNER_TEMP}/avr8-gnu-toolchain-4.0.0.52-linux.any.x86_64.tar.gz"
+          if [ ! -f "$tarball" ]; then
+            curl -fL --retry 3 --retry-delay 2 -o "$tarball" "$TOOLCHAIN_URL"
+          fi
+          echo "${TOOLCHAIN_SHA256}  ${tarball}" | sha256sum -c -
+          dest="${RUNNER_TEMP}/avr8-gnu-toolchain-4.0.0"
+          rm -rf "$dest"
+          tar -xzf "$tarball" -C "$RUNNER_TEMP"
+          mv "${RUNNER_TEMP}/avr8-gnu-toolchain-linux_x86_64" "$dest"
+          echo "TOOLCHAIN=${dest}" >> "$GITHUB_ENV"
+          "$dest/bin/avr-gcc" --version | head -n 1 | tee "${RUNNER_TEMP}/avr-gcc-version.txt"
+          grep -F "AVR_8_bit_GNU_Toolchain_4.0.0_52" "${RUNNER_TEMP}/avr-gcc-version.txt"
+
+      - name: Build native and RadSens images
+        run: |
+          set -euo pipefail
+          make -C firmware PROTOCOL=native EXTRA_CFLAGS=-Werror
+          make -C firmware PROTOCOL=radsens EXTRA_CFLAGS=-Werror
+          python3 firmware/tools/release_assets.py check-hex \
+            firmware/bin/native/geigernode.hex \
+            firmware/bin/radsens/geigernode.hex
+
+      - name: Upload HEX images
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-hex
+          path: |
+            firmware/bin/native/geigernode.hex
+            firmware/bin/radsens/geigernode.hex
+          if-no-files-found: error
+
+      - name: Package Flipper release assets
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          git for-each-ref --format='%(contents)' "refs/tags/${TAG}" > "${RUNNER_TEMP}/tag-message.txt"
+          version=$(head -n 1 "${RUNNER_TEMP}/avr-gcc-version.txt")
+          python3 firmware/tools/release_assets.py package \
+            --tag "$TAG" \
+            --commit "$GITHUB_SHA" \
+            --toolchain "$version" \
+            --tag-message-file "${RUNNER_TEMP}/tag-message.txt" \
+            --native firmware/bin/native/geigernode.hex \
+            --radsens firmware/bin/radsens/geigernode.hex \
+            --makefile firmware/Makefile \
+            --out dist
+
+      - name: Upload release assets
+        if: github.ref_type == 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          tagged=$(git rev-parse "${TAG}^{}")
+          if [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "Tag ${TAG} points at ${tagged}, not ${GITHUB_SHA}." >&2
+            exit 1
+          fi
+          python3 firmware/tools/release_assets.py classify "$TAG" > "${RUNNER_TEMP}/class.txt"
+          class_pre=$(sed -n 's/^prerelease=//p' "${RUNNER_TEMP}/class.txt")
+          file_pre=$(sed -n 's/^PRERELEASE=//p' dist/release.env)
+          if [ "$class_pre" != "$file_pre" ]; then
+            echo "Pre-release flag mismatch: classify=${class_pre} assets=${file_pre}" >&2
+            exit 1
+          fi
+          args=(release create "$TAG" --verify-tag --title "$TAG" --notes-file dist/RELEASE_NOTES.md)
+          if [ "$class_pre" = true ]; then
+            args+=(--prerelease)
+          else
+            args+=(--latest)
+          fi
+          gh "${args[@]}" dist/GeigerNode-*
+          if [ "$class_pre" = true ]; then
+            gh api --method PATCH \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
+              -f make_latest=false
+          fi

@@ -1,6 +1,9 @@
 # Firmware build output
 firmware/bin/
 
+# Staged GitHub release files
+/dist/
+
 # Stray build artifacts outside bin/
 *.o
 *.d

@@ -50,6 +50,23 @@ The board is externally powered. Atmel-ICE does not power the target. `make flas
 
 Release path: `feature/*` → `dev` → `master` with a `vMAJOR.MINOR.PATCH` tag.
 
+## Continuous integration
+
+[`.github/workflows/firmware.yml`](.github/workflows/firmware.yml) lints and tests pull requests and pushes to `dev` and `master`, then builds both firmware images. The compiler is the AVR 8-bit GNU Toolchain 4.0.0 (`avr-gcc` 15.1.0), and the build treats warnings as errors.
+
+Pushing a version tag publishes a GitHub release. The assets are the native and RadSens Intel HEX images plus the matching Flipper AVR Flasher descriptors:
+
+| Asset | What it is |
+| --- | --- |
+| `GeigerNode-<tag>-native_flash.hex` | Native protocol at `0x67`. Flash data records and an end record. |
+| `GeigerNode-<tag>-native.avr` | Flipper descriptor for that HEX file. |
+| `GeigerNode-<tag>-radsens_flash.hex` | RadSens protocol at `0x66`. Flash data records and an end record. |
+| `GeigerNode-<tag>-radsens.avr` | Flipper descriptor for that HEX file. |
+
+`v1.2.3` is a release. A tag with a pre-release suffix is a GitHub pre-release and is not marked Latest. That suffix is the SemVer pre-release identifier: `-beta`, `-rc`, `-pre`, `-alpha`, and any other `-identifier`, including dotted forms such as `v0.2.1-beta.2` and `v0.2.0-pre.1`.
+
+Each `.avr` descriptor names the approved fuses LFUSE `E2`, HFUSE `D9`, EFUSE `F5`, and lock `FF`. Flash AVR writes those bytes and chip-erases EEPROM. Do not change those bytes. After the programmer reset the LED is on for 500 ms, then 380 V starts. Stay clear of the HV section. The workflow itself only uploads files.
+
 ## Source
 
 Private repository: [CZ-Infokom/GeigerNode](https://github.com/CZ-Infokom/GeigerNode)

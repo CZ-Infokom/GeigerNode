@@ -1,0 +1,5 @@
+target-version = "py312"
+
+[lint]
+# Syntax errors and pyflakes. Style upgrades stay out of CI.
+select = ["E9", "F"]
