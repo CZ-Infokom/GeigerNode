@@ -32,14 +32,16 @@ extern volatile uint32_t system_ms;
  * in order. Later close gaps stay in the bins only.
  *
  * After an accepted edge, further falling edges are ignored for the
- * live holdoff. An ignored edge does not move that stamp. GM_BLANKING_US
- * is the default and the ceiling: 300 us covers the SBM-20 190 us dead
- * time and the 151-185 us recovery seen on the earlier tube. Bins and
- * counts record accepted edges only.
+ * live holdoff. An ignored edge does not move that stamp.
+ * GM_BLANKING_DEFAULT_US is the power-on value. GM_BLANKING_US is the
+ * ceiling: 300 us covers the SBM-20 190 us dead time and the 151-185 us
+ * recovery seen on the earlier tube. Bins and counts record accepted
+ * edges only.
  */
-#define GM_CLOSE_LOG        16U
-#define GM_CLOSE_LIMIT_US   500U
-#define GM_BLANKING_US      300U
+#define GM_CLOSE_LOG              16U
+#define GM_CLOSE_LIMIT_US         500U
+#define GM_BLANKING_DEFAULT_US    200U
+#define GM_BLANKING_US            300U
 
 struct gm_counter_snapshot {
 	uint32_t total_count;
@@ -63,8 +65,10 @@ struct gm_counter_snapshot {
  * the same order as gm_counter_snapshot. flags bit 0 is set when any bin
  * is at 65535. The close log stays off the bus.
  */
-#define GM_HISTOGRAM_BIN_COUNT 9U
-#define GM_HISTOGRAM_SATURATED 0x01U
+#define GM_HISTOGRAM_BIN_COUNT  9U
+#define GM_HISTOGRAM_EDGE_COUNT 8U
+#define GM_HISTOGRAM_SPAN_US    10000U
+#define GM_HISTOGRAM_SATURATED  0x01U
 
 struct gm_histogram {
 	uint32_t min_interval_us;

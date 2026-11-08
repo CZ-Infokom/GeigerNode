@@ -9,20 +9,25 @@
 /*
  * Accepted falling edges are counted. For the live holdoff after an
  * accepted edge, further falling edges are ignored and do not move the
- * stamp. The live value starts at GM_BLANKING_US and never exceeds it.
+ * stamp. The live value starts at GM_BLANKING_DEFAULT_US and never
+ * exceeds GM_BLANKING_US.
  * Timer0, prescaler 8, is a 1 us free-running clock. Timer1 stays the HV
  * switcher and Timer2 stays the 1 ms tick. The overflow word plus TCNT0
  * is the stamp.
  *
- * Bins are exclusive and count accepted gaps only. 2400 Hz switching is
- * 417 us, so that spacing lands in 200–500 us, outside the 300 us holdoff.
- * Sensitivity is not applied here.
+ * Bins are exclusive and count accepted gaps only. Holdoff 0 keeps the
+ * classic upper bounds 50..10000 us. Any other holdoff starts bin 0 at
+ * that holdoff and stretches those bounds up to 10 ms. 2400 Hz switching
+ * is 417 us. Sensitivity is not applied here.
  */
 #if F_CPU != 8000000UL
 #error "The 1 us stamp is calculated for F_CPU=8000000UL"
 #endif
 _Static_assert(F_CPU / 8UL == 1000000UL, "Timer0 prescaler 8 is 1 us");
-_Static_assert(GM_BLANKING_US == 300U, "holdoff trial is 300 us");
+_Static_assert(GM_BLANKING_US == 300U, "holdoff ceiling is 300 us");
+_Static_assert(GM_BLANKING_DEFAULT_US == 200U, "holdoff default is 200 us");
+_Static_assert(GM_BLANKING_DEFAULT_US <= GM_BLANKING_US,
+	       "default holdoff fits the ceiling");
 
 const struct gm_tube_profile gm_tube_si29bg __attribute__((used)) = {
 	GM_TUBE_SI29BG_HV_V,
@@ -41,21 +46,14 @@ static volatile uint32_t gm_total_count;
 static volatile uint32_t gm_window_count;
 static volatile uint32_t gm_last_pulse_us;
 static volatile uint32_t gm_min_interval_us;
-static volatile uint16_t gm_bin_lt_50us;
-static volatile uint16_t gm_bin_50_100us;
-static volatile uint16_t gm_bin_100_200us;
-static volatile uint16_t gm_bin_200_500us;
-static volatile uint16_t gm_bin_500us_1ms;
-static volatile uint16_t gm_bin_1_2ms;
-static volatile uint16_t gm_bin_2_5ms;
-static volatile uint16_t gm_bin_5_10ms;
-static volatile uint16_t gm_bin_ge_10ms;
+static volatile uint16_t gm_bins[GM_HISTOGRAM_BIN_COUNT];
+static volatile uint16_t gm_edges[GM_HISTOGRAM_EDGE_COUNT];
 static volatile uint16_t gm_close_us[GM_CLOSE_LOG];
 static volatile uint8_t gm_close_count;
 static volatile uint8_t gm_pulse_seen;
 static volatile uint8_t gm_window_open;
 static volatile uint8_t gm_have_last;
-static volatile uint16_t gm_blanking_us = GM_BLANKING_US;
+static volatile uint16_t gm_blanking_us = GM_BLANKING_DEFAULT_US;
 
 static inline __attribute__((always_inline)) void gm_bump(volatile uint16_t *bin)
 {
@@ -74,20 +72,56 @@ static void gm_clear_close(void)
 	gm_close_count = 0;
 }
 
+static const uint16_t gm_classic_edges[GM_HISTOGRAM_EDGE_COUNT] = {
+	50U, 100U, 200U, 500U, 1000U, 2000U, 5000U, GM_HISTOGRAM_SPAN_US
+};
+
+_Static_assert(GM_HISTOGRAM_EDGE_COUNT + 1U == GM_HISTOGRAM_BIN_COUNT,
+	       "eight upper bounds make nine bins");
+_Static_assert(GM_HISTOGRAM_SPAN_US == 10000U, "open bin starts at 10 ms");
+
 /* Call with INT0 blocked, or before EIMSK is set. */
 static void gm_zero_histogram(void)
 {
+	uint8_t i;
+
 	gm_min_interval_us = 0xFFFFFFFFUL;
-	gm_bin_lt_50us = 0;
-	gm_bin_50_100us = 0;
-	gm_bin_100_200us = 0;
-	gm_bin_200_500us = 0;
-	gm_bin_500us_1ms = 0;
-	gm_bin_1_2ms = 0;
-	gm_bin_2_5ms = 0;
-	gm_bin_5_10ms = 0;
-	gm_bin_ge_10ms = 0;
+	for (i = 0; i < GM_HISTOGRAM_BIN_COUNT; i++) {
+		gm_bins[i] = 0;
+	}
 	gm_clear_close();
+}
+
+/* Call with INT0 blocked, or before EIMSK is set. */
+static void gm_install_edges(uint16_t holdoff_us)
+{
+	uint8_t i;
+	uint16_t prev;
+
+	if (holdoff_us == 0U) {
+		for (i = 0; i < GM_HISTOGRAM_EDGE_COUNT; i++) {
+			gm_edges[i] = gm_classic_edges[i];
+		}
+		return;
+	}
+	prev = holdoff_us;
+	for (i = 0; i < GM_HISTOGRAM_EDGE_COUNT; i++) {
+		uint32_t num;
+		uint16_t edge;
+
+		num = (uint32_t)gm_classic_edges[i] *
+		      (uint32_t)(GM_HISTOGRAM_SPAN_US - holdoff_us) + 5000UL;
+		edge = (uint16_t)(holdoff_us + (num / (uint32_t)GM_HISTOGRAM_SPAN_US));
+		if (i == (GM_HISTOGRAM_EDGE_COUNT - 1U)) {
+			edge = GM_HISTOGRAM_SPAN_US;
+		}
+		if (edge <= prev) {
+			edge = (uint16_t)(prev + 1U);
+		}
+		gm_edges[i] = edge;
+		prev = edge;
+	}
+	gm_edges[GM_HISTOGRAM_EDGE_COUNT - 1U] = GM_HISTOGRAM_SPAN_US;
 }
 
 ISR(TIMER0_OVF_vect)
@@ -109,25 +143,15 @@ static inline __attribute__((always_inline)) uint32_t gm_now_us(void)
 
 static inline __attribute__((always_inline)) void gm_bin_interval(uint32_t delta)
 {
-	if (delta < 50UL) {
-		gm_bump(&gm_bin_lt_50us);
-	} else if (delta < 100UL) {
-		gm_bump(&gm_bin_50_100us);
-	} else if (delta < 200UL) {
-		gm_bump(&gm_bin_100_200us);
-	} else if (delta < 500UL) {
-		gm_bump(&gm_bin_200_500us);
-	} else if (delta < 1000UL) {
-		gm_bump(&gm_bin_500us_1ms);
-	} else if (delta < 2000UL) {
-		gm_bump(&gm_bin_1_2ms);
-	} else if (delta < 5000UL) {
-		gm_bump(&gm_bin_2_5ms);
-	} else if (delta < 10000UL) {
-		gm_bump(&gm_bin_5_10ms);
-	} else {
-		gm_bump(&gm_bin_ge_10ms);
+	uint8_t i;
+
+	for (i = 0; i < GM_HISTOGRAM_EDGE_COUNT; i++) {
+		if (delta < gm_edges[i]) {
+			gm_bump(&gm_bins[i]);
+			return;
+		}
 	}
+	gm_bump(&gm_bins[GM_HISTOGRAM_BIN_COUNT - 1U]);
 }
 
 ISR(INT0_vect)
@@ -183,12 +207,14 @@ void gm_counter_set_blanking_us(uint16_t blanking_us)
 	}
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
 		gm_blanking_us = blanking_us;
+		gm_install_edges(blanking_us);
 	}
 }
 
 void gm_counter_init(void)
 {
-	gm_blanking_us = GM_BLANKING_US;
+	gm_blanking_us = GM_BLANKING_DEFAULT_US;
+	gm_install_edges(GM_BLANKING_DEFAULT_US);
 	gm_total_count = 0;
 	gm_window_count = 0;
 	gm_last_pulse_us = 0;
@@ -268,15 +294,15 @@ void gm_counter_snapshot(struct gm_counter_snapshot *out)
 		out->total_count = gm_total_count;
 		out->window_count = gm_window_count;
 		out->min_interval_us = gm_min_interval_us;
-		out->bin_lt_50us = gm_bin_lt_50us;
-		out->bin_50_100us = gm_bin_50_100us;
-		out->bin_100_200us = gm_bin_100_200us;
-		out->bin_200_500us = gm_bin_200_500us;
-		out->bin_500us_1ms = gm_bin_500us_1ms;
-		out->bin_1_2ms = gm_bin_1_2ms;
-		out->bin_2_5ms = gm_bin_2_5ms;
-		out->bin_5_10ms = gm_bin_5_10ms;
-		out->bin_ge_10ms = gm_bin_ge_10ms;
+		out->bin_lt_50us = gm_bins[0];
+		out->bin_50_100us = gm_bins[1];
+		out->bin_100_200us = gm_bins[2];
+		out->bin_200_500us = gm_bins[3];
+		out->bin_500us_1ms = gm_bins[4];
+		out->bin_1_2ms = gm_bins[5];
+		out->bin_2_5ms = gm_bins[6];
+		out->bin_5_10ms = gm_bins[7];
+		out->bin_ge_10ms = gm_bins[8];
 		out->close_interval_count = gm_close_count;
 		for (uint8_t i = 0; i < GM_CLOSE_LOG; i++) {
 			out->close_intervals_us[i] = gm_close_us[i];
@@ -289,16 +315,12 @@ void gm_counter_histogram(struct gm_histogram *out)
 	uint8_t flags = 0;
 
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+		uint8_t i;
+
 		out->min_interval_us = gm_min_interval_us;
-		out->bins[0] = gm_bin_lt_50us;
-		out->bins[1] = gm_bin_50_100us;
-		out->bins[2] = gm_bin_100_200us;
-		out->bins[3] = gm_bin_200_500us;
-		out->bins[4] = gm_bin_500us_1ms;
-		out->bins[5] = gm_bin_1_2ms;
-		out->bins[6] = gm_bin_2_5ms;
-		out->bins[7] = gm_bin_5_10ms;
-		out->bins[8] = gm_bin_ge_10ms;
+		for (i = 0; i < GM_HISTOGRAM_BIN_COUNT; i++) {
+			out->bins[i] = gm_bins[i];
+		}
 	}
 	if (out->bins[0] == 65535U || out->bins[1] == 65535U ||
 	    out->bins[2] == 65535U || out->bins[3] == 65535U ||

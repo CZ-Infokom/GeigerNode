@@ -1,6 +1,6 @@
 # GeigerNode I2C register map (RadSens)
 
-This is the ClimateGuard RadSens map at `0x66`, built with `make PROTOCOL=radsens`. Protocol v2 at `0x67` is `make PROTOCOL=native`; see `geigernode-i2c-protocol.md`. The static window on this map stays 300 s. Holdoff stays 300 µs. Neither is a register here.
+This is the ClimateGuard RadSens map at `0x66`, built with `make PROTOCOL=radsens`. Protocol v2 at `0x67` is `make PROTOCOL=native`; see `geigernode-i2c-protocol.md`. The static window on this map stays 300 s. Holdoff stays 200 µs. Neither is a register here.
 
 Slave address `0x66` until a host changes it. Hardware TWI0 is the slave on PC4 (SDA) and PC5 (SCL). The bit-banged image remains on `fallback/bitbang-i2c`.
 

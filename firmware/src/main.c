@@ -38,11 +38,16 @@ _Static_assert(RADIATION_RADSENS_MAX == 1440000UL,
 	       "RadSens intensity saturates at 144000.0 uR/h");
 #ifdef GEIGERNODE_PROTOCOL_NATIVE
 _Static_assert(TWI_SLAVE_ADDRESS == 0x67U, "native address is 0x67");
-_Static_assert(TWI_REG_COUNT == 0x39U, "native map is 57 bytes");
+_Static_assert(TWI_REG_COUNT == 0x50U, "native map is 80 bytes");
 _Static_assert(GN_PROTOCOL_VERSION == 2U, "protocol version is 2");
-_Static_assert(GN_CAPS_VALUE == 0x0FU, "caps include histogram");
+_Static_assert(GN_FW_MAJOR == 0U && GN_FW_MINOR == 2U &&
+	       GN_FW_PATCH == 1U && GN_FW_PRE == 4U,
+	       "firmware version is 0.2.1-beta.4");
+_Static_assert(GN_CAPS_VALUE == 0x1FU, "caps include peaks");
 _Static_assert(GN_HISTOGRAM_CLEAR == 0x01U, "histogram clear is write 1 at 0x38");
 _Static_assert(GM_HISTOGRAM_BIN_COUNT == 9U, "nine exclusive bins");
+_Static_assert(GM_HISTOGRAM_EDGE_COUNT == 8U, "eight holdoff-scaled upper bounds");
+_Static_assert(GN_PEAK_SPAN_DEFAULT_S == 10U, "peak span default is 10 s");
 _Static_assert(RADIATION_SBM20_NSVH_PER_CPM_Q16 == 604948UL,
 	       "SBM-20 Q16.16 is round(600/65*65536)");
 #else
@@ -105,6 +110,8 @@ static uint16_t window_s = 300U;
 static uint32_t stat_sum;
 #ifdef GEIGERNODE_PROTOCOL_NATIVE
 static uint32_t stat_elapsed_ms;
+static uint32_t run_elapsed_ms;
+static uint8_t run_elapsed_overflow;
 #endif
 static uint32_t dyn_sum;
 static uint8_t dyn_len;
@@ -117,6 +124,19 @@ static uint8_t snap_app;
 static uint8_t snap_attempts;
 static uint8_t run_has_sample;
 static uint32_t snap_seq;
+static uint16_t peak_span = GN_PEAK_SPAN_DEFAULT_S;
+static uint16_t peak_slice_len;
+static uint32_t peak_slice_sum;
+static uint32_t peak_slice_ms;
+static uint8_t peak_win_valid;
+static uint16_t peak_win_end;
+static uint32_t peak_win_count;
+static uint32_t peak_win_ms;
+static uint8_t peak_latch_valid;
+static uint32_t peak_latch_count;
+static uint32_t peak_latch_ms;
+static uint8_t peak_latch_dirty;
+static uint8_t peak_need_rescan;
 #endif
 
 volatile uint32_t system_ms;
@@ -218,6 +238,15 @@ static void windows_clear(void)
 	stat_sum = 0;
 #ifdef GEIGERNODE_PROTOCOL_NATIVE
 	stat_elapsed_ms = 0;
+	run_elapsed_ms = 0;
+	run_elapsed_overflow = 0;
+	peak_slice_len = 0;
+	peak_slice_sum = 0;
+	peak_slice_ms = 0;
+	peak_win_valid = 0;
+	peak_win_count = 0;
+	peak_win_ms = 0;
+	peak_need_rescan = 0;
 #endif
 	dyn_sum = 0;
 	dyn_len = 0;
@@ -272,6 +301,232 @@ static void window_apply(uint16_t next)
 		}
 	}
 	window_s = next;
+	peak_need_rescan = 1;
+}
+
+static uint16_t peak_bucket_ms_at(uint16_t idx)
+{
+	return (uint16_t)(APP_PUBLISH_MS + cps_extra[idx]);
+}
+
+static int8_t peak_rate_cmp(uint32_t ca, uint32_t ma, uint32_t cb, uint32_t mb)
+{
+	uint64_t left;
+	uint64_t right;
+
+	if (ma == 0UL && mb == 0UL) {
+		return 0;
+	}
+	if (ma == 0UL) {
+		return -1;
+	}
+	if (mb == 0UL) {
+		return 1;
+	}
+	left = (uint64_t)ca * (uint64_t)mb;
+	right = (uint64_t)cb * (uint64_t)ma;
+	if (left > right) {
+		return 1;
+	}
+	if (left < right) {
+		return -1;
+	}
+	return 0;
+}
+
+static uint16_t peak_age(uint16_t idx)
+{
+	return (uint16_t)((cps_pos + APP_STATIC_MAX - 1U - idx) % APP_STATIC_MAX);
+}
+
+static uint8_t peak_slice_in_window(uint16_t end_idx)
+{
+	uint16_t window_len = cps_len < window_s ? cps_len : window_s;
+
+	if (window_len < peak_span) {
+		return 0;
+	}
+	return (uint8_t)(peak_age(end_idx) + peak_span <= window_len);
+}
+
+static void peak_rescan_window(void)
+{
+	uint16_t window_len = cps_len < window_s ? cps_len : window_s;
+	uint16_t idx;
+	uint16_t n;
+	uint16_t end;
+	uint32_t sum;
+	uint32_t ms;
+
+	peak_win_valid = 0;
+	peak_win_count = 0;
+	peak_win_ms = 0;
+	peak_need_rescan = 0;
+	if (window_len < peak_span) {
+		return;
+	}
+	idx = (uint16_t)((cps_pos + APP_STATIC_MAX - window_len) % APP_STATIC_MAX);
+	sum = 0;
+	ms = 0;
+	for (n = 0; n < peak_span; n++) {
+		sum += cps_buckets[idx];
+		ms += peak_bucket_ms_at(idx);
+		idx = (uint16_t)((idx + 1U) % APP_STATIC_MAX);
+	}
+	end = (uint16_t)((idx + APP_STATIC_MAX - 1U) % APP_STATIC_MAX);
+	peak_win_valid = 1;
+	peak_win_end = end;
+	peak_win_count = sum;
+	peak_win_ms = ms;
+	n = (uint16_t)(window_len - peak_span);
+	while (n > 0U) {
+		uint16_t drop = (uint16_t)((end + APP_STATIC_MAX + 1U - peak_span) %
+					   APP_STATIC_MAX);
+		uint16_t add = (uint16_t)((end + 1U) % APP_STATIC_MAX);
+
+		sum -= cps_buckets[drop];
+		ms -= peak_bucket_ms_at(drop);
+		sum += cps_buckets[add];
+		ms += peak_bucket_ms_at(add);
+		end = add;
+		if (peak_rate_cmp(sum, ms, peak_win_count, peak_win_ms) >= 0) {
+			peak_win_end = end;
+			peak_win_count = sum;
+			peak_win_ms = ms;
+		}
+		n--;
+	}
+}
+
+static void peak_rebuild_newest_slice(void)
+{
+	uint16_t n;
+	uint16_t idx;
+
+	peak_slice_len = 0;
+	peak_slice_sum = 0;
+	peak_slice_ms = 0;
+	if (cps_len == 0U || peak_span == 0U) {
+		return;
+	}
+	n = cps_len < peak_span ? cps_len : peak_span;
+	idx = (uint16_t)((cps_pos + APP_STATIC_MAX - n) % APP_STATIC_MAX);
+	while (peak_slice_len < n) {
+		peak_slice_sum += cps_buckets[idx];
+		peak_slice_ms += peak_bucket_ms_at(idx);
+		peak_slice_len++;
+		idx = (uint16_t)((idx + 1U) % APP_STATIC_MAX);
+	}
+}
+
+static void peak_span_apply(uint16_t next)
+{
+	if (next < GN_PEAK_SPAN_MIN_S) {
+		next = GN_PEAK_SPAN_MIN_S;
+	}
+	if (next > GN_PEAK_SPAN_MAX_S) {
+		next = GN_PEAK_SPAN_MAX_S;
+	}
+	if (next == peak_span) {
+		return;
+	}
+	peak_span = next;
+	peak_win_valid = 0;
+	peak_win_count = 0;
+	peak_win_ms = 0;
+	peak_latch_valid = 0;
+	peak_latch_count = 0;
+	peak_latch_ms = 0;
+	peak_latch_dirty = 0;
+	peak_rebuild_newest_slice();
+	peak_need_rescan = 1;
+	twi_slave_set_native_peaks(0, 0, 0, 0);
+}
+
+static void peak_on_bucket(uint16_t delta, uint16_t bucket_ms)
+{
+	uint16_t newest;
+	uint16_t drop;
+
+	newest = (uint16_t)((cps_pos + APP_STATIC_MAX - 1U) % APP_STATIC_MAX);
+	if (peak_slice_len < peak_span) {
+		peak_slice_sum += delta;
+		peak_slice_ms += bucket_ms;
+		peak_slice_len++;
+	} else {
+		drop = (uint16_t)((cps_pos + APP_STATIC_MAX - peak_span - 1U) %
+				  APP_STATIC_MAX);
+		peak_slice_sum += delta;
+		peak_slice_ms += bucket_ms;
+		peak_slice_sum -= cps_buckets[drop];
+		peak_slice_ms -= peak_bucket_ms_at(drop);
+	}
+	if (peak_slice_len < peak_span) {
+		return;
+	}
+	if (!peak_win_valid ||
+	    peak_rate_cmp(peak_slice_sum, peak_slice_ms, peak_win_count,
+			  peak_win_ms) >= 0) {
+		peak_win_valid = 1;
+		peak_win_end = newest;
+		peak_win_count = peak_slice_sum;
+		peak_win_ms = peak_slice_ms;
+	} else if (!peak_slice_in_window(peak_win_end)) {
+		peak_need_rescan = 1;
+	}
+	if (!peak_latch_valid ||
+	    peak_rate_cmp(peak_slice_sum, peak_slice_ms, peak_latch_count,
+			  peak_latch_ms) >= 0) {
+		peak_latch_valid = 1;
+		peak_latch_count = peak_slice_sum;
+		peak_latch_ms = peak_slice_ms;
+		peak_latch_dirty = 1;
+	}
+}
+
+static void peak_rates(uint32_t *win_cpm, uint32_t *latch_cpm,
+		       uint32_t *win_dose, uint32_t *latch_dose)
+{
+	uint8_t ov = 0;
+	uint32_t cal = gn_config_cal_q16();
+
+	*win_cpm = 0;
+	*latch_cpm = 0;
+	*win_dose = 0;
+	*latch_dose = 0;
+	if (peak_need_rescan ||
+	    (peak_win_valid && !peak_slice_in_window(peak_win_end))) {
+		peak_rescan_window();
+	}
+	if (peak_win_valid) {
+		*win_cpm = radiation_cpm_x10(peak_win_count, peak_win_ms, &ov);
+		*win_dose = radiation_dose_nsvh(peak_win_count, peak_win_ms, cal,
+					       &ov);
+	}
+	if (peak_latch_valid) {
+		*latch_cpm = radiation_cpm_x10(peak_latch_count, peak_latch_ms,
+					      &ov);
+		*latch_dose = radiation_dose_nsvh(peak_latch_count, peak_latch_ms,
+						  cal, &ov);
+	}
+}
+
+static void peak_on_latch_consume(void)
+{
+	uint32_t win_cpm;
+	uint32_t latch_cpm;
+	uint32_t win_dose;
+	uint32_t latch_dose;
+
+	if (peak_latch_dirty) {
+		peak_latch_dirty = 0;
+	} else {
+		peak_latch_valid = 0;
+		peak_latch_count = 0;
+		peak_latch_ms = 0;
+	}
+	peak_rates(&win_cpm, &latch_cpm, &win_dose, &latch_dose);
+	twi_slave_set_native_peaks(win_cpm, latch_cpm, win_dose, latch_dose);
 }
 #endif
 
@@ -315,6 +570,13 @@ static void windows_push(uint16_t delta, uint32_t dt)
 	} else {
 		extra = (uint16_t)(dt - APP_PUBLISH_MS);
 		bucket_ms = (uint16_t)(APP_PUBLISH_MS + extra);
+	}
+	/* Run time keeps counting after the published window is full. */
+	if (run_elapsed_ms > (0xFFFFFFFFUL - bucket_ms)) {
+		run_elapsed_ms = 0xFFFFFFFFUL;
+		run_elapsed_overflow = 1U;
+	} else {
+		run_elapsed_ms += bucket_ms;
 	}
 #else
 	(void)dt;
@@ -366,6 +628,9 @@ static void windows_push(uint16_t delta, uint32_t dt)
 		stat_elapsed_ms -= (uint32_t)APP_PUBLISH_MS + cps_extra[drop];
 #endif
 	}
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+	peak_on_bucket(delta, bucket_ms);
+#endif
 	if (dyn_len <= APP_DYNAMIC_RECENT) {
 		return;
 	}
@@ -442,13 +707,19 @@ static void native_publish_rates(uint8_t app, uint8_t attempts)
 	uint8_t ov_dose = 0;
 	uint32_t cpm;
 	uint32_t dose;
-	uint32_t elapsed = stat_elapsed_ms;
+	uint32_t window_elapsed = stat_elapsed_ms;
+	uint32_t peak_win_cpm;
+	uint32_t peak_latch_cpm;
+	uint32_t peak_win_dose;
+	uint32_t peak_latch_dose;
 	struct gm_histogram histogram;
 
-	cpm = radiation_cpm_x10(stat_sum, elapsed, &ov_cpm);
-	dose = radiation_dose_nsvh(stat_sum, elapsed, gn_config_cal_q16(),
+	cpm = radiation_cpm_x10(stat_sum, window_elapsed, &ov_cpm);
+	dose = radiation_dose_nsvh(stat_sum, window_elapsed, gn_config_cal_q16(),
 				   &ov_dose);
 	gm_counter_histogram(&histogram);
+	peak_rates(&peak_win_cpm, &peak_latch_cpm, &peak_win_dose,
+		   &peak_latch_dose);
 	if (snap_seq < 0xFFFFFFFFUL) {
 		snap_seq++;
 	} else {
@@ -457,12 +728,14 @@ static void native_publish_rates(uint8_t app, uint8_t attempts)
 	run_has_sample = 1;
 	snap_valid = 1;
 	snap_full = (uint8_t)(cps_len >= window_s);
-	snap_overflow = (uint8_t)(ov_cpm | ov_dose);
+	snap_overflow = (uint8_t)(ov_cpm | ov_dose | run_elapsed_overflow);
 	snap_app = app;
 	snap_attempts = attempts;
 	twi_slave_publish_native(dose, cpm, native_status(), snap_seq,
-				 gn_config_cal_q16(), stat_sum, elapsed,
-				 &histogram);
+				 gn_config_cal_q16(), stat_sum, run_elapsed_ms,
+				 &histogram, peak_win_cpm, peak_latch_cpm,
+				 peak_win_dose, peak_latch_dose);
+	peak_latch_dirty = 0;
 }
 #endif
 
@@ -621,6 +894,7 @@ int main(void)
 	radsens_init();
 #ifdef GEIGERNODE_PROTOCOL_NATIVE
 	window_apply(gn_config_window_s());
+	peak_span_apply(gn_config_peak_span_s());
 	native_touch_status(APP_DELAY, 0);
 #endif
 	sei();
@@ -632,6 +906,10 @@ int main(void)
 		radsens_poll();
 #ifdef GEIGERNODE_PROTOCOL_NATIVE
 		window_apply(gn_config_window_s());
+		peak_span_apply(gn_config_peak_span_s());
+		if (twi_slave_take_peak_latch_consume()) {
+			peak_on_latch_consume();
+		}
 #endif
 		hv_cmd = radsens_hv_command();
 

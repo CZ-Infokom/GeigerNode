@@ -33,6 +33,10 @@ static volatile uint8_t twi_cmd_ptr;
 static volatile uint8_t twi_cmd_len;
 static volatile uint8_t twi_cmd_data[TWI_WRITE_MAX];
 static volatile uint8_t twi_cmd_ready;
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+static uint8_t read_start;
+static volatile uint8_t peak_latch_consume;
+#endif
 
 #ifdef GEIGERNODE_PROTOCOL_NATIVE
 
@@ -50,6 +54,14 @@ static void twi_store_u32(volatile uint8_t *dest, uint32_t value)
 	dest[3] = (uint8_t)value;
 }
 
+static void twi_store_fw(volatile uint8_t *dest)
+{
+	dest[GN_REG_FW_MAJOR] = GN_FW_MAJOR;
+	dest[GN_REG_FW_MINOR] = GN_FW_MINOR;
+	dest[GN_REG_FW_PATCH] = GN_FW_PATCH;
+	dest[GN_REG_FW_PRE] = GN_FW_PRE;
+}
+
 static void twi_fill_bank(volatile uint8_t *dest)
 {
 	uint8_t i;
@@ -60,10 +72,13 @@ static void twi_fill_bank(volatile uint8_t *dest)
 	twi_store_u16(&dest[GN_REG_DEVICE_ID], GN_DEVICE_ID);
 	dest[GN_REG_PROTOCOL] = GN_PROTOCOL_VERSION;
 	dest[GN_REG_CAPS] = GN_CAPS_VALUE;
+	twi_store_fw(dest);
 	twi_store_u32(&dest[GN_REG_CAL], RADIATION_SBM20_NSVH_PER_CPM_Q16);
 	twi_store_u16(&dest[GN_REG_WINDOW_S], GN_WINDOW_DEFAULT_S);
 	twi_store_u16(&dest[GN_REG_HOLDOFF_US], GN_HOLDOFF_DEFAULT_US);
 	twi_store_u32(&dest[GN_REG_MIN_INTERVAL], 0xFFFFFFFFUL);
+	dest[GN_REG_PEAK_RESERVED] = 0;
+	twi_store_u16(&dest[GN_REG_PEAK_SPAN_S], GN_PEAK_SPAN_DEFAULT_S);
 }
 
 #else
@@ -258,6 +273,9 @@ ISR(TWI0_vect)
 		} else {
 			send_ptr = 0;
 		}
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+		read_start = send_ptr;
+#endif
 		twi_send_byte();
 		TWCR0 = TWI_CR_ACK;
 		break;
@@ -269,6 +287,19 @@ ISR(TWI0_vect)
 
 	case TW_ST_DATA_NACK: /* 0xC0 */
 	case TW_ST_LAST_DATA: /* 0xC8 */
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+		/*
+		 * send_ptr is one past the last byte transmitted. A full
+		 * covering of either latched peak register consumes both.
+		 */
+		if (read_bank != 0 &&
+		    ((read_start <= GN_REG_PEAK_LATCH_CPM &&
+		      send_ptr >= (uint8_t)(GN_REG_PEAK_LATCH_CPM + 4U)) ||
+		     (read_start <= GN_REG_PEAK_LATCH_DOSE &&
+		      send_ptr >= (uint8_t)(GN_REG_PEAK_LATCH_DOSE + 4U)))) {
+			peak_latch_consume = 1;
+		}
+#endif
 		read_bank = 0;
 		TWCR0 = TWI_CR_ACK;
 		break;
@@ -308,6 +339,10 @@ void twi_slave_init(void)
 	twi_cmd_ptr = 0;
 	twi_cmd_len = 0;
 	twi_cmd_ready = 0;
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+	read_start = 0;
+	peak_latch_consume = 0;
+#endif
 	for (i = 0; i < TWI_WRITE_MAX; i++) {
 		twi_write_data[i] = 0;
 		twi_cmd_data[i] = 0;
@@ -338,7 +373,9 @@ void twi_slave_publish_native(uint32_t dose_nsvh, uint32_t cpm_x10,
 			      uint16_t status, uint32_t sequence,
 			      uint32_t cal_q16, uint32_t count,
 			      uint32_t elapsed_ms,
-			      const struct gm_histogram *histogram)
+			      const struct gm_histogram *histogram,
+			      uint32_t peak_win_cpm, uint32_t peak_latch_cpm,
+			      uint32_t peak_win_dose, uint32_t peak_latch_dose)
 {
 	volatile uint8_t *dest;
 
@@ -347,6 +384,7 @@ void twi_slave_publish_native(uint32_t dose_nsvh, uint32_t cpm_x10,
 		twi_store_u16(&dest[GN_REG_DEVICE_ID], GN_DEVICE_ID);
 		dest[GN_REG_PROTOCOL] = GN_PROTOCOL_VERSION;
 		dest[GN_REG_CAPS] = GN_CAPS_VALUE;
+		twi_store_fw(dest);
 		twi_store_u32(&dest[GN_REG_DOSE], dose_nsvh);
 		twi_store_u32(&dest[GN_REG_CPM_X10], cpm_x10);
 		twi_store_u16(&dest[GN_REG_STATUS], status);
@@ -366,6 +404,11 @@ void twi_slave_publish_native(uint32_t dose_nsvh, uint32_t cpm_x10,
 		twi_store_u16(&dest[GN_REG_BIN_5_10MS], histogram->bins[7]);
 		twi_store_u16(&dest[GN_REG_BIN_GE_10MS], histogram->bins[8]);
 		dest[GN_REG_HISTOGRAM_FLAGS] = histogram->flags;
+		dest[GN_REG_PEAK_RESERVED] = 0;
+		twi_store_u32(&dest[GN_REG_PEAK_WIN_CPM], peak_win_cpm);
+		twi_store_u32(&dest[GN_REG_PEAK_LATCH_CPM], peak_latch_cpm);
+		twi_store_u32(&dest[GN_REG_PEAK_WIN_DOSE], peak_win_dose);
+		twi_store_u32(&dest[GN_REG_PEAK_LATCH_DOSE], peak_latch_dose);
 		regs_pub = dest;
 	}
 }
@@ -382,7 +425,7 @@ void twi_slave_set_native_status(uint16_t status)
 }
 
 void twi_slave_set_native_config(uint16_t window_s, uint16_t holdoff_us,
-				 uint32_t cal_q16)
+				 uint32_t cal_q16, uint16_t peak_span_s)
 {
 	volatile uint8_t *dest;
 
@@ -391,6 +434,24 @@ void twi_slave_set_native_config(uint16_t window_s, uint16_t holdoff_us,
 		twi_store_u16(&dest[GN_REG_WINDOW_S], window_s);
 		twi_store_u16(&dest[GN_REG_HOLDOFF_US], holdoff_us);
 		twi_store_u32(&dest[GN_REG_CAL], cal_q16);
+		dest[GN_REG_PEAK_RESERVED] = 0;
+		twi_store_u16(&dest[GN_REG_PEAK_SPAN_S], peak_span_s);
+		regs_pub = dest;
+	}
+}
+
+void twi_slave_set_native_peaks(uint32_t peak_win_cpm, uint32_t peak_latch_cpm,
+				uint32_t peak_win_dose, uint32_t peak_latch_dose)
+{
+	volatile uint8_t *dest;
+
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+		dest = twi_begin_update();
+		dest[GN_REG_PEAK_RESERVED] = 0;
+		twi_store_u32(&dest[GN_REG_PEAK_WIN_CPM], peak_win_cpm);
+		twi_store_u32(&dest[GN_REG_PEAK_LATCH_CPM], peak_latch_cpm);
+		twi_store_u32(&dest[GN_REG_PEAK_WIN_DOSE], peak_win_dose);
+		twi_store_u32(&dest[GN_REG_PEAK_LATCH_DOSE], peak_latch_dose);
 		regs_pub = dest;
 	}
 }
@@ -408,6 +469,17 @@ void twi_slave_clear_native_histogram(void)
 		}
 		regs_pub = dest;
 	}
+}
+
+uint8_t twi_slave_take_peak_latch_consume(void)
+{
+	uint8_t flag;
+
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+		flag = peak_latch_consume;
+		peak_latch_consume = 0;
+	}
+	return flag;
 }
 
 #else

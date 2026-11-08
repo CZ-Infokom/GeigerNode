@@ -15,9 +15,27 @@
  */
 #define GN_NVM_ADDR     960U
 #define GN_NVM_MAGIC    0xC3U
-#define GN_NVM_VERSION  1U
+#define GN_NVM_VERSION  2U
+#define GN_NVM_VERSION1 1U
 
 struct gn_nvm {
+	uint8_t magic;
+	uint8_t version;
+	uint8_t window_hi;
+	uint8_t window_lo;
+	uint8_t holdoff_hi;
+	uint8_t holdoff_lo;
+	uint8_t cal0;
+	uint8_t cal1;
+	uint8_t cal2;
+	uint8_t cal3;
+	uint8_t peak_span_hi;
+	uint8_t peak_span_lo;
+	uint8_t checksum;
+};
+
+/* Version 1 stopped after cal3 and checksum. */
+struct gn_nvm_v1 {
 	uint8_t magic;
 	uint8_t version;
 	uint8_t window_hi;
@@ -31,23 +49,40 @@ struct gn_nvm {
 	uint8_t checksum;
 };
 
-_Static_assert(sizeof(struct gn_nvm) == 11U, "native config record is 11 bytes");
+_Static_assert(sizeof(struct gn_nvm) == 13U, "native config record is 13 bytes");
+_Static_assert(sizeof(struct gn_nvm_v1) == 11U, "native v1 record is 11 bytes");
 _Static_assert(GN_NVM_ADDR >= 178U, "native config clears the HV series");
 _Static_assert(GN_NVM_ADDR >= 256U + 106U, "native config clears the GM record");
 _Static_assert(GN_NVM_ADDR + sizeof(struct gn_nvm) <= 1024U,
 	       "native config fits in EEPROM");
 _Static_assert(GN_NVM_MAGIC != 0xA5U, "native magic differs from RadSens");
 _Static_assert(GN_HOLDOFF_MAX_US == GM_BLANKING_US, "holdoff ceiling is 300 us");
-_Static_assert(GN_HOLDOFF_DEFAULT_US == GM_BLANKING_US, "holdoff default is 300 us");
+_Static_assert(GN_HOLDOFF_DEFAULT_US == GM_BLANKING_DEFAULT_US,
+	       "holdoff default is 200 us");
+_Static_assert(GN_HOLDOFF_DEFAULT_US <= GN_HOLDOFF_MAX_US,
+	       "default holdoff fits the ceiling");
 _Static_assert(GN_WINDOW_DEFAULT_S == 300U, "window default is 300 s");
 _Static_assert(GN_WINDOW_DEFAULT_S <= GN_WINDOW_MAX_S, "default window fits");
 _Static_assert(GN_WINDOW_MIN_S >= 1U, "window is at least one second");
+_Static_assert(GN_PEAK_SPAN_DEFAULT_S == 10U, "peak span default is 10 s");
+_Static_assert(GN_PEAK_SPAN_MIN_S <= GN_PEAK_SPAN_DEFAULT_S, "default peak span fits");
+_Static_assert(GN_PEAK_SPAN_DEFAULT_S <= GN_PEAK_SPAN_MAX_S, "default peak span fits");
+_Static_assert(GN_PEAK_SPAN_MAX_S <= GN_WINDOW_MAX_S, "peak span fits the ring");
 
 static uint16_t cfg_window = GN_WINDOW_DEFAULT_S;
 static uint16_t cfg_holdoff = GN_HOLDOFF_DEFAULT_US;
+static uint16_t cfg_peak_span = GN_PEAK_SPAN_DEFAULT_S;
 static uint32_t cfg_cal = RADIATION_SBM20_NSVH_PER_CPM_Q16;
 
 static uint8_t nvm_sum(const struct gn_nvm *nvm)
+{
+	return (uint8_t)(nvm->magic + nvm->version + nvm->window_hi +
+			 nvm->window_lo + nvm->holdoff_hi + nvm->holdoff_lo +
+			 nvm->cal0 + nvm->cal1 + nvm->cal2 + nvm->cal3 +
+			 nvm->peak_span_hi + nvm->peak_span_lo);
+}
+
+static uint8_t nvm_sum_v1(const struct gn_nvm_v1 *nvm)
 {
 	return (uint8_t)(nvm->magic + nvm->version + nvm->window_hi +
 			 nvm->window_lo + nvm->holdoff_hi + nvm->holdoff_lo +
@@ -65,9 +100,16 @@ static uint8_t cfg_in_range(uint16_t window_s, uint16_t holdoff_us, uint32_t cal
 	return cal != 0U;
 }
 
+static uint8_t cfg_peak_in_range(uint16_t peak_span_s)
+{
+	return (uint8_t)(peak_span_s >= GN_PEAK_SPAN_MIN_S &&
+			 peak_span_s <= GN_PEAK_SPAN_MAX_S);
+}
+
 static void cfg_publish(void)
 {
-	twi_slave_set_native_config(cfg_window, cfg_holdoff, cfg_cal);
+	twi_slave_set_native_config(cfg_window, cfg_holdoff, cfg_cal,
+				    cfg_peak_span);
 	gm_counter_set_blanking_us(cfg_holdoff);
 }
 
@@ -91,6 +133,8 @@ static void nvm_save(void)
 	nvm.cal1 = (uint8_t)(cfg_cal >> 16);
 	nvm.cal2 = (uint8_t)(cfg_cal >> 8);
 	nvm.cal3 = (uint8_t)cfg_cal;
+	nvm.peak_span_hi = (uint8_t)(cfg_peak_span >> 8);
+	nvm.peak_span_lo = (uint8_t)cfg_peak_span;
 	nvm.checksum = nvm_sum(&nvm);
 	eeprom_update_block(&nvm, (void *)GN_NVM_ADDR, sizeof nvm);
 }
@@ -100,10 +144,10 @@ static uint16_t cfg_u16(uint8_t hi, uint8_t lo)
 	return (uint16_t)(((uint16_t)hi << 8) | lo);
 }
 
-static uint32_t cfg_cal_bytes(const struct gn_nvm *nvm)
+static uint32_t cfg_cal_bytes(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3)
 {
-	return ((uint32_t)nvm->cal0 << 24) | ((uint32_t)nvm->cal1 << 16) |
-	       ((uint32_t)nvm->cal2 << 8) | nvm->cal3;
+	return ((uint32_t)b0 << 24) | ((uint32_t)b1 << 16) |
+	       ((uint32_t)b2 << 8) | b3;
 }
 
 void gn_config_init(void)
@@ -111,18 +155,37 @@ void gn_config_init(void)
 	struct gn_nvm nvm;
 	uint16_t window_s;
 	uint16_t holdoff_us;
+	uint16_t peak_span_s;
 	uint32_t cal;
 
 	eeprom_read_block(&nvm, (const void *)GN_NVM_ADDR, sizeof nvm);
 	window_s = cfg_u16(nvm.window_hi, nvm.window_lo);
 	holdoff_us = cfg_u16(nvm.holdoff_hi, nvm.holdoff_lo);
-	cal = cfg_cal_bytes(&nvm);
+	cal = cfg_cal_bytes(nvm.cal0, nvm.cal1, nvm.cal2, nvm.cal3);
+	peak_span_s = cfg_u16(nvm.peak_span_hi, nvm.peak_span_lo);
 	if (nvm.magic == GN_NVM_MAGIC && nvm.version == GN_NVM_VERSION &&
 	    nvm_sum(&nvm) == nvm.checksum &&
-	    cfg_in_range(window_s, holdoff_us, cal)) {
+	    cfg_in_range(window_s, holdoff_us, cal) &&
+	    cfg_peak_in_range(peak_span_s)) {
 		cfg_window = window_s;
 		cfg_holdoff = holdoff_us;
 		cfg_cal = cal;
+		cfg_peak_span = peak_span_s;
+	} else {
+		struct gn_nvm_v1 v1;
+
+		eeprom_read_block(&v1, (const void *)GN_NVM_ADDR, sizeof v1);
+		window_s = cfg_u16(v1.window_hi, v1.window_lo);
+		holdoff_us = cfg_u16(v1.holdoff_hi, v1.holdoff_lo);
+		cal = cfg_cal_bytes(v1.cal0, v1.cal1, v1.cal2, v1.cal3);
+		if (v1.magic == GN_NVM_MAGIC && v1.version == GN_NVM_VERSION1 &&
+		    nvm_sum_v1(&v1) == v1.checksum &&
+		    cfg_in_range(window_s, holdoff_us, cal)) {
+			cfg_window = window_s;
+			cfg_holdoff = holdoff_us;
+			cfg_cal = cal;
+			cfg_peak_span = GN_PEAK_SPAN_DEFAULT_S;
+		}
 	}
 	cfg_publish();
 }
@@ -172,6 +235,15 @@ void gn_config_on_write(const struct twi_write_cmd *cmd)
 		nvm_save();
 		cfg_publish();
 		cfg_clear_histogram();
+		return;
+	}
+	if (cmd->ptr == GN_REG_PEAK_SPAN_S) {
+		if (!cfg_peak_in_range(value) || value == cfg_peak_span) {
+			return;
+		}
+		cfg_peak_span = value;
+		nvm_save();
+		cfg_publish();
 	}
 }
 
@@ -183,6 +255,11 @@ uint16_t gn_config_window_s(void)
 uint16_t gn_config_holdoff_us(void)
 {
 	return cfg_holdoff;
+}
+
+uint16_t gn_config_peak_span_s(void)
+{
+	return cfg_peak_span;
 }
 
 uint32_t gn_config_cal_q16(void)

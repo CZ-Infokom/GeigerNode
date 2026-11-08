@@ -2,12 +2,12 @@
 """GeigerNode I2C measurement viewer over the ESP32-C3 USB bridge.
 
 Reads native protocol v2 at 0x67 or the RadSens map at 0x66, plus the BME680
-at 0x76. RadSens 0x09/0x0A are never read. Register writes stay disabled until
-the warning is accepted, and each write confirms again. Native histogram
-clear is write 1 at 0x38; an accepted holdoff write also clears it. A RadSens
-HV write starts or stops 380 V and does not change the setpoint. BME680
-measurement registers are written for the sensor cycle. Fuses and the
-programmer port are not touched.
+at 0x76. RadSens 0x09/0x0A are never read. Register writes live in the Edit
+menu. Each write confirms before it is queued. Native histogram clear is
+write 1 at 0x38; an accepted holdoff write also clears it. A RadSens HV write
+starts or stops 380 V and does not change the setpoint. BME680 measurement
+registers are written for the sensor cycle. Fuses and the programmer port
+are not touched.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import argparse
 import csv
 import glob
 import io
+import math
 import queue
 import re
 import struct
@@ -32,6 +33,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFormLayout,
     QGridLayout,
@@ -42,7 +44,6 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QVBoxLayout,
@@ -56,7 +57,7 @@ BAUD = 115200
 POLL_INTERVAL_S = 1.0
 BRIDGE_TIMEOUT_S = 1.5
 BRIDGE_MAX_TRANSFER = 32  # USB-I2C bridge rejects a longer read or write
-NATIVE_MAP_SIZE = 0x39
+NATIVE_MAP_SIZE = 0x50
 HISTORY_MAX = 7200  # about two hours at one sample per second; RAM only
 
 NATIVE_ADDR = 0x67
@@ -136,8 +137,60 @@ NATIVE_HISTOGRAM_BIN_LABELS = (
     "5–10 ms",
     "≥10 ms",
 )
+NATIVE_HISTOGRAM_CLASSIC_EDGES = (50, 100, 200, 500, 1000, 2000, 5000, 10000)
+NATIVE_HISTOGRAM_SPAN_US = 10000
+
+
+def histogram_edges(holdoff_us: int) -> tuple[int, ...]:
+    """Eight upper bounds, same formula as firmware gm_install_edges()."""
+    holdoff = max(0, min(300, int(holdoff_us)))
+    if holdoff == 0:
+        return NATIVE_HISTOGRAM_CLASSIC_EDGES
+    edges: list[int] = []
+    prev = holdoff
+    for index, classic in enumerate(NATIVE_HISTOGRAM_CLASSIC_EDGES):
+        edge = holdoff + (classic * (NATIVE_HISTOGRAM_SPAN_US - holdoff) + 5000) // (
+            NATIVE_HISTOGRAM_SPAN_US
+        )
+        if index == len(NATIVE_HISTOGRAM_CLASSIC_EDGES) - 1:
+            edge = NATIVE_HISTOGRAM_SPAN_US
+        if edge <= prev:
+            edge = prev + 1
+        edges.append(edge)
+        prev = edge
+    edges[-1] = NATIVE_HISTOGRAM_SPAN_US
+    return tuple(edges)
+
+
+def _format_gap_us(microseconds: int) -> str:
+    if microseconds >= 1000 and microseconds % 1000 == 0:
+        ms = microseconds // 1000
+        return "1 ms" if ms == 1 else f"{ms} ms"
+    return f"{microseconds} µs"
+
+
+def _format_gap_span(low: int, high: int) -> str:
+    low_text = _format_gap_us(low)
+    high_text = _format_gap_us(high)
+    if low_text.endswith(" µs") and high_text.endswith(" µs"):
+        return f"{low}–{high} µs"
+    if low_text.endswith(" ms") and high_text.endswith(" ms"):
+        return f"{low_text[:-3]}–{high_text}"
+    return f"{low_text}–{high_text}"
+
+
+def histogram_bin_labels(holdoff_us: int) -> tuple[str, ...]:
+    if holdoff_us <= 0:
+        return NATIVE_HISTOGRAM_BIN_LABELS
+    edges = histogram_edges(holdoff_us)
+    labels = [_format_gap_span(holdoff_us, edges[0])]
+    for index in range(len(edges) - 1):
+        labels.append(_format_gap_span(edges[index], edges[index + 1]))
+    labels.append(f"≥{_format_gap_us(edges[-1])}")
+    return tuple(labels)
 
 NATIVE_CAPS_HISTOGRAM = 0x08
+NATIVE_CAPS_PEAKS = 0x10
 NATIVE_HISTOGRAM_SATURATED = 0x01
 
 
@@ -159,6 +212,12 @@ class NativeReading:
     min_interval_us: Optional[int] = None
     histogram_bins: tuple[int, ...] = ()
     histogram_flags: int = 0
+    fw_version: Optional[tuple[int, int, int, int]] = None
+    peak_span_s: int = 0
+    peak_win_cpm_x10: Optional[int] = None
+    peak_latch_cpm_x10: Optional[int] = None
+    peak_win_nsvh: Optional[int] = None
+    peak_latch_nsvh: Optional[int] = None
 
     @property
     def dose_usvh(self) -> float:
@@ -179,6 +238,16 @@ class NativeReading:
         ) == 9
 
     @property
+    def has_peaks(self) -> bool:
+        return (
+            bool(self.capabilities & NATIVE_CAPS_PEAKS)
+            and self.peak_win_cpm_x10 is not None
+            and self.peak_latch_cpm_x10 is not None
+            and self.peak_win_nsvh is not None
+            and self.peak_latch_nsvh is not None
+        )
+
+    @property
     def histogram_saturated(self) -> bool:
         return bool(self.histogram_flags & NATIVE_HISTOGRAM_SATURATED)
 
@@ -196,6 +265,12 @@ def decode_native(data: bytes) -> NativeReading:
     min_interval_us: Optional[int] = None
     histogram_bins: tuple[int, ...] = ()
     histogram_flags = 0
+    fw_version: Optional[tuple[int, int, int, int]] = None
+    peak_span_s = 0
+    peak_win_cpm_x10: Optional[int] = None
+    peak_latch_cpm_x10: Optional[int] = None
+    peak_win_nsvh: Optional[int] = None
+    peak_latch_nsvh: Optional[int] = None
     if protocol >= 2 and len(data) >= 0x22:
         window_s = be16(data, 0x1E)
         holdoff_us = be16(data, 0x20)
@@ -207,6 +282,20 @@ def decode_native(data: bytes) -> NativeReading:
         min_interval_us = be32(data, 0x22)
         histogram_bins = tuple(be16(data, 0x26 + (index * 2)) for index in range(9))
         histogram_flags = data[0x38]
+    if len(data) >= 0x3D:
+        raw = data[0x39:0x3D]
+        if raw != b"\xff\xff\xff\xff":
+            fw_version = (raw[0], raw[1], raw[2], raw[3])
+    if (
+        protocol >= 2
+        and (capabilities & NATIVE_CAPS_PEAKS)
+        and len(data) >= 0x50
+    ):
+        peak_span_s = be16(data, 0x3E)
+        peak_win_cpm_x10 = be32(data, 0x40)
+        peak_latch_cpm_x10 = be32(data, 0x44)
+        peak_win_nsvh = be32(data, 0x48)
+        peak_latch_nsvh = be32(data, 0x4C)
     return NativeReading(
         device_id=be16(data, 0x00),
         protocol=protocol,
@@ -225,7 +314,21 @@ def decode_native(data: bytes) -> NativeReading:
         min_interval_us=min_interval_us,
         histogram_bins=histogram_bins,
         histogram_flags=histogram_flags,
+        fw_version=fw_version,
+        peak_span_s=peak_span_s,
+        peak_win_cpm_x10=peak_win_cpm_x10,
+        peak_latch_cpm_x10=peak_latch_cpm_x10,
+        peak_win_nsvh=peak_win_nsvh,
+        peak_latch_nsvh=peak_latch_nsvh,
     )
+
+
+def format_fw_version(major: int, minor: int, patch: int, pre: int) -> str:
+    """0.2.1-beta.4 when pre is 4. Pre-release 0 is a release."""
+    text = f"{major}.{minor}.{patch}"
+    if pre:
+        text += f"-beta.{pre}"
+    return text
 
 
 @dataclass
@@ -314,6 +417,12 @@ def encode_native_histogram_clear() -> bytes:
     return bytes([0x38, 0x01])
 
 
+def encode_native_peak_span(seconds: int) -> bytes:
+    if not 10 <= seconds <= 60:
+        raise ValueError("peak span must be 10..60 s")
+    return bytes([0x3E, (seconds >> 8) & 0xFF, seconds & 0xFF])
+
+
 def encode_radsens_byte(pointer: int, value: int) -> bytes:
     if value not in (0, 1):
         raise ValueError("value must be 0 or 1")
@@ -356,11 +465,16 @@ def render_csv(history: SampleHistory, native: Optional[NativeReading] = None) -
     if native is not None and native.has_histogram:
         writer.writerow([])
         writer.writerow(["histogram_bin", "count"])
-        for label, count in zip(NATIVE_HISTOGRAM_BIN_LABELS, native.histogram_bins):
+        for label, count in zip(
+            histogram_bin_labels(native.holdoff_us), native.histogram_bins
+        ):
             writer.writerow([label, count])
         gap = "" if native.min_interval_us in (None, 0xFFFFFFFF) else native.min_interval_us
         writer.writerow(["min_gap_us", gap])
         writer.writerow(["saturated", int(native.histogram_saturated)])
+    if native is not None and native.fw_version is not None:
+        writer.writerow([])
+        writer.writerow(["firmware", format_fw_version(*native.fw_version)])
     return buf.getvalue()
 
 
@@ -875,7 +989,7 @@ class DeviceSession:
         snap = Snapshot(port=self.client.port, mode=self.mode, bme_present=self.bme_present)
         try:
             if self.mode == "native":
-                # The bridge rejects a single 57-byte read. Each span sets the pointer.
+                # The bridge rejects a read longer than 32 bytes. Each span sets the pointer.
                 parts = [
                     self.client.xfer(NATIVE_ADDR, [offset], length)
                     for offset, length in read_spans(NATIVE_MAP_SIZE)
@@ -947,6 +1061,13 @@ class SampleHistory:
             self.series[name] = buf
         buf.append((when - self.t0, float(value)))
 
+    def set_maxlen(self, maxlen: int) -> None:
+        if maxlen < 1:
+            raise ValueError("history length must be at least 1")
+        self.maxlen = maxlen
+        for name, buf in list(self.series.items()):
+            self.series[name] = deque(buf, maxlen=maxlen)
+
     def clear(self) -> None:
         self.series.clear()
         self.t0 = None
@@ -967,6 +1088,19 @@ def record_snapshot(history: SampleHistory, snap: Snapshot, when: Optional[float
     if snap.native is not None:
         history.add("dose_usvh", snap.native.dose_usvh, when)
         history.add("cpm", snap.native.cpm, when)
+        if snap.native.has_peaks:
+            assert snap.native.peak_win_nsvh is not None
+            assert snap.native.peak_latch_nsvh is not None
+            assert snap.native.peak_win_cpm_x10 is not None
+            assert snap.native.peak_latch_cpm_x10 is not None
+            history.add("peak_win_usvh", snap.native.peak_win_nsvh / 1000.0, when)
+            history.add(
+                "peak_latch_usvh", snap.native.peak_latch_nsvh / 1000.0, when
+            )
+            history.add("peak_win_cpm", snap.native.peak_win_cpm_x10 / 10.0, when)
+            history.add(
+                "peak_latch_cpm", snap.native.peak_latch_cpm_x10 / 10.0, when
+            )
     if snap.radsens is not None:
         history.add("dynamic_usvh", snap.radsens.dynamic_usvh, when)
         history.add("static_usvh", snap.radsens.static_usvh, when)
@@ -990,12 +1124,90 @@ def record_snapshot(history: SampleHistory, snap: Snapshot, when: Optional[float
             history.add("gas_kohm", snap.bme.gas_ohms / 1000.0, when)
 
 
-def padded_range(lo: float, hi: float) -> tuple[float, float]:
-    if lo == hi:
-        pad = abs(lo) * 0.05 or 1.0
-        return lo - pad, hi + pad
-    pad = (hi - lo) * 0.08
-    return lo - pad, hi + pad
+# Four equal intervals. 4 and 5 (and 0.4 / 0.5) are the mantissas; 1 and 2
+# keep the next larger ceiling from jumping a whole decade.
+_NICE_MANTISSA = (1, 2, 4, 5)
+_TIME_STEPS = (15, 30, 60, 120, 300, 600, 900, 1800, 3600)
+# A Y end closer to zero than this fraction of the far end is pinned to 0.
+Y_ZERO_SNAP = 0.20
+
+
+def _candidate_steps(raw: float, extra: tuple[float, ...] = ()) -> list[float]:
+    if raw <= 0:
+        raw = 1.0
+    exp = math.floor(math.log10(raw))
+    steps = [
+        mant * (10.0 ** e)
+        for e in range(exp, exp + 4)
+        for mant in _NICE_MANTISSA
+    ]
+    steps.extend(extra)
+    chosen: list[float] = []
+    for step in sorted(steps):
+        if step < raw - 1e-9 * max(raw, 1.0):
+            continue
+        if chosen and abs(step - chosen[-1]) <= 1e-9 * max(step, 1.0):
+            continue
+        chosen.append(step)
+    return chosen or [10.0 ** (exp + 1)]
+
+
+def _snap_floor(value: float, step: float) -> float:
+    return math.floor(value / step + 1e-8) * step
+
+
+def nice_limits(
+    lo: float, hi: float, *, time: bool = False
+) -> tuple[float, float, float]:
+    """Snap a span to four equal steps of 1, 2, 4, or 5 times a power of ten.
+
+    Time also accepts 15 s, 30 s, 1 min, and the longer clock steps when one
+    of those is the nearest larger fit. A value of 0 stays on 0. A narrow
+    band is not pulled down to 0.
+    """
+    if hi < lo:
+        lo, hi = hi, lo
+    extra = _TIME_STEPS if time else ()
+    span = hi - lo
+    if span <= 0:
+        step = _candidate_steps(abs(lo) * 0.05 or 1.0, extra)[0]
+        ymin = _snap_floor(lo, step)
+        if lo >= 0 and ymin < 0:
+            ymin = 0.0
+        return ymin, ymin + 4 * step, step
+    raw = span / 4.0
+    scale = max(1.0, abs(lo), abs(hi))
+    for step in _candidate_steps(raw, extra):
+        ymin = _snap_floor(lo, step)
+        if lo >= 0 and ymin < 0:
+            ymin = 0.0
+        ymax = ymin + 4 * step
+        if ymin <= lo + 1e-8 * scale and ymax >= hi - 1e-8 * scale:
+            return ymin, ymax, step
+    step = _candidate_steps(raw, extra)[-1]
+    ymin = 0.0 if lo >= 0 else _snap_floor(lo, step)
+    return ymin, ymin + 4 * step, step
+
+
+def y_axis_limits(lo: float, hi: float) -> tuple[float, float, float]:
+    """Value-axis limits. A near-zero end under 20% of the far end snaps to 0."""
+    if hi < lo:
+        lo, hi = hi, lo
+    if hi > 0.0 and lo >= 0.0 and lo / hi < Y_ZERO_SNAP:
+        lo = 0.0
+    elif lo < 0.0 and hi <= 0.0 and hi / lo < Y_ZERO_SNAP:
+        hi = 0.0
+    return nice_limits(lo, hi)
+
+
+def axis_ticks(lo: float, hi: float) -> list[float]:
+    step = (hi - lo) / 4.0
+    return [lo + step * i for i in range(5)]
+
+
+def format_duration_s(milliseconds: int) -> str:
+    """Register milliseconds as seconds, one decimal."""
+    return f"{milliseconds / 1000.0:.1f} s"
 
 
 def format_elapsed(seconds: float) -> str:
@@ -1010,12 +1222,16 @@ def format_elapsed(seconds: float) -> str:
 def format_y(value: float) -> str:
     mag = abs(value)
     if mag >= 100:
-        return f"{value:.0f}"
-    if mag >= 10:
-        return f"{value:.1f}"
-    if mag >= 1:
-        return f"{value:.2f}"
-    return f"{value:.3f}"
+        text = f"{value:.0f}"
+    elif mag >= 10:
+        text = f"{value:.1f}"
+    elif mag >= 1:
+        text = f"{value:.2f}"
+    else:
+        text = f"{value:.3f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
 
 
 def format_elapsed_precise(seconds: float) -> str:
@@ -1035,10 +1251,8 @@ CHART_MARGIN = (56, 24, 12, 22)
 def series_bounds(series: list[tuple[str, object, list[tuple[float, float]]]]) -> tuple[float, float, float, float]:
     xs = [p[0] for _, _, pts in series for p in pts]
     ys = [p[1] for _, _, pts in series for p in pts]
-    xmin, xmax = min(xs), max(xs)
-    if xmax <= xmin:
-        xmax = xmin + 1.0
-    ymin, ymax = padded_range(min(ys), max(ys))
+    xmin, xmax, _ = nice_limits(min(xs), max(xs), time=True)
+    ymin, ymax, _ = y_axis_limits(min(ys), max(ys))
     return xmin, xmax, ymin, ymax
 
 
@@ -1061,13 +1275,49 @@ def nearest_point(points: list[tuple[float, float]], t: float) -> tuple[float, f
     return min(candidates, key=lambda p: (abs(p[0] - t), p[0]))
 
 
-def time_from_x(px: float, plot_left: float, plot_width: float, xmin: float, xmax: float) -> float:
+def _log_u(t: float, xmax: float) -> float:
+    """Log age from the newest sample. Older times sit further left."""
+    age = xmax - t
+    if age < 0.0:
+        age = 0.0
+    return -math.log1p(age)
+
+
+def _log_span(xmin: float, xmax: float) -> tuple[float, float]:
+    """Oldest at -log(1 + span), newest at 0. Early intervals shrink."""
+    return -math.log1p(max(0.0, xmax - xmin)), 0.0
+
+
+def time_from_x(
+    px: float,
+    plot_left: float,
+    plot_width: float,
+    xmin: float,
+    xmax: float,
+    log: bool = False,
+) -> float:
     if plot_width <= 0:
         return xmin
+    if log:
+        lo, hi = _log_span(xmin, xmax)
+        if hi > lo:
+            u = lo + (px - plot_left) / plot_width * (hi - lo)
+            return xmax - math.expm1(-u)
     return xmin + (px - plot_left) / plot_width * (xmax - xmin)
 
 
-def x_from_time(t: float, plot_left: float, plot_width: float, xmin: float, xmax: float) -> float:
+def x_from_time(
+    t: float,
+    plot_left: float,
+    plot_width: float,
+    xmin: float,
+    xmax: float,
+    log: bool = False,
+) -> float:
+    if log:
+        lo, hi = _log_span(xmin, xmax)
+        if hi > lo:
+            return plot_left + (_log_u(t, xmax) - lo) / (hi - lo) * plot_width
     if xmax <= xmin:
         return plot_left
     return plot_left + (t - xmin) / (xmax - xmin) * plot_width
@@ -1084,9 +1334,12 @@ class HistoryChart(QWidget):
         self.history: Optional[SampleHistory] = None
         self.cursor_t: Optional[float] = None
         self.show_readout = False
+        self.log_x = False
         self.hover_callback = None
-        self.setMinimumHeight(160)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumHeight(120)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         self.setMouseTracking(True)
 
     def set_history(self, history: SampleHistory) -> None:
@@ -1112,7 +1365,9 @@ class HistoryChart(QWidget):
         if not series or plot.width() < 10 or px < plot.left() or px > plot.right():
             return None
         xmin, xmax, _, _ = series_bounds(series)
-        t = time_from_x(px, plot.left(), plot.width(), xmin, xmax)
+        t = time_from_x(
+            px, plot.left(), plot.width(), xmin, xmax, log=self.log_x
+        )
         candidates = [nearest_point(pts, t) for _, _, pts in series]
         snapped = min(candidates, key=lambda p: (abs(p[0] - t), p[0]))
         return snapped[0]
@@ -1146,7 +1401,6 @@ class HistoryChart(QWidget):
         palette = self.palette()
         painter.fillRect(self.rect(), palette.color(QPalette.ColorRole.Base))
         fg = palette.color(QPalette.ColorRole.Text)
-        grid = palette.color(QPalette.ColorRole.Mid)
         painter.setPen(fg)
         painter.drawText(8, 16, self.title)
 
@@ -1162,23 +1416,45 @@ class HistoryChart(QWidget):
             return
 
         xmin, xmax, ymin, ymax = series_bounds(series)
-
-        painter.setPen(QPen(grid, 1))
-        for i in range(5):
-            y = plot.top() + plot.height() * i / 4
+        y_span = ymax - ymin or 1.0
+        muted = QColor(fg)
+        muted.setAlpha(72)
+        painter.setPen(QPen(muted, 1))
+        for value in axis_ticks(ymin, ymax):
+            y = plot.bottom() - (value - ymin) / y_span * plot.height()
             painter.drawLine(plot.left(), int(y), plot.right(), int(y))
-            value = ymax - (ymax - ymin) * i / 4
-            painter.setPen(fg)
-            painter.drawText(2, int(y) + 4, format_y(value))
-            painter.setPen(QPen(grid, 1))
+        for tick in axis_ticks(xmin, xmax):
+            x = x_from_time(
+                tick, plot.left(), plot.width(), xmin, xmax, log=self.log_x
+            )
+            painter.drawLine(int(x), plot.top(), int(x), plot.bottom())
 
         painter.setPen(fg)
-        painter.drawText(plot.left(), self.height() - 4, format_elapsed(xmin))
-        painter.drawText(plot.right() - 36, self.height() - 4, format_elapsed(xmax))
+        for value in axis_ticks(ymin, ymax):
+            y = plot.bottom() - (value - ymin) / y_span * plot.height()
+            painter.drawText(2, int(y) + 4, format_y(value))
+        label_right = plot.left()
+        for tick in axis_ticks(xmin, xmax):
+            label = format_elapsed(tick)
+            width = painter.fontMetrics().horizontalAdvance(label)
+            x = x_from_time(
+                tick, plot.left(), plot.width(), xmin, xmax, log=self.log_x
+            )
+            left = int(x) - width // 2
+            if tick == xmin:
+                left = int(plot.left())
+            elif tick == xmax:
+                left = int(plot.right()) - width
+            if left < label_right:
+                continue
+            painter.drawText(left, self.height() - 4, label)
+            label_right = left + width + 6
         painter.drawText(plot.right() - 88, 16, self.ylabel)
 
         def map_point(t: float, value: float) -> QPointF:
-            x = x_from_time(t, plot.left(), plot.width(), xmin, xmax)
+            x = x_from_time(
+                t, plot.left(), plot.width(), xmin, xmax, log=self.log_x
+            )
             y = plot.bottom() - (value - ymin) / (ymax - ymin) * plot.height()
             return QPointF(x, y)
 
@@ -1193,7 +1469,9 @@ class HistoryChart(QWidget):
 
         cursor_samples: list[tuple[str, QColor, float]] = []
         if self.cursor_t is not None and xmin <= self.cursor_t <= xmax:
-            cx = x_from_time(self.cursor_t, plot.left(), plot.width(), xmin, xmax)
+            cx = x_from_time(
+                self.cursor_t, plot.left(), plot.width(), xmin, xmax, log=self.log_x
+            )
             pen = QPen(fg, 1)
             pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
@@ -1220,7 +1498,9 @@ class HistoryChart(QWidget):
             metrics = painter.fontMetrics()
             width = max(metrics.horizontalAdvance(line) for line in lines) + 12
             height = metrics.height() * len(lines) + 8
-            cx = x_from_time(self.cursor_t, plot.left(), plot.width(), xmin, xmax)
+            cx = x_from_time(
+                self.cursor_t, plot.left(), plot.width(), xmin, xmax, log=self.log_x
+            )
             box_x = cx + 8
             if box_x + width > plot.right():
                 box_x = cx - width - 8
@@ -1246,13 +1526,21 @@ class HistogramBars(QWidget):
     def __init__(self):
         super().__init__()
         self.counts: tuple[int, ...] = ()
+        self.labels: tuple[str, ...] = NATIVE_HISTOGRAM_BIN_LABELS
         self.saturated = False
         self.caption = ""
-        self.setMinimumHeight(188)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumSize(420, 240)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-    def set_bins(self, counts: tuple[int, ...], min_gap: Optional[int], saturated: bool) -> None:
+    def set_bins(
+        self,
+        counts: tuple[int, ...],
+        min_gap: Optional[int],
+        saturated: bool,
+        labels: Optional[tuple[str, ...]] = None,
+    ) -> None:
         self.counts = counts
+        self.labels = labels if labels is not None else NATIVE_HISTOGRAM_BIN_LABELS
         self.saturated = saturated
         if min_gap in (None, 0xFFFFFFFF):
             gap = "none yet"
@@ -1277,13 +1565,14 @@ class HistogramBars(QWidget):
             return
         top = 24
         row_h = max(14, (self.height() - top - 6) // 9)
-        label_w = 92
+        labels = self.labels if len(self.labels) == 9 else NATIVE_HISTOGRAM_BIN_LABELS
+        label_w = 108
         count_w = 52
         max_count = max(self.counts) or 1
         track_left = label_w + 8
         track_right = self.width() - count_w - 8
         track_w = max(10, track_right - track_left)
-        for index, (label, count) in enumerate(zip(NATIVE_HISTOGRAM_BIN_LABELS, self.counts)):
+        for index, (label, count) in enumerate(zip(labels, self.counts)):
             y = top + index * row_h
             painter.setPen(fg)
             painter.drawText(4, y + row_h - 4, label)
@@ -1297,10 +1586,16 @@ class PollWorker(QThread):
     snapshot = pyqtSignal(object)
     failed = pyqtSignal(str)
 
-    def __init__(self, port: str, write_queue: "queue.Queue[RegisterWrite]"):
+    def __init__(
+        self,
+        port: str,
+        write_queue: "queue.Queue[RegisterWrite]",
+        interval_s: float = POLL_INTERVAL_S,
+    ):
         super().__init__()
         self.port = port
         self.write_queue = write_queue
+        self.interval_s = interval_s
         self._stop = False
 
     def stop(self) -> None:
@@ -1350,7 +1645,7 @@ class PollWorker(QThread):
                 snap.notice = notice
                 self.snapshot.emit(snap)
                 elapsed = time.monotonic() - t0
-                remaining = POLL_INTERVAL_S - elapsed
+                remaining = self.interval_s - elapsed
                 end = time.monotonic() + max(0.05, remaining)
                 while not self._stop and time.monotonic() < end:
                     if not self.write_queue.empty():
@@ -1370,14 +1665,16 @@ class MainWindow(QMainWindow):
     def __init__(self, port: str):
         super().__init__()
         self.setWindowTitle("GeigerNode I2C viewer")
-        self.resize(980, 960)
+        self.resize(1680, 980)
         self.port = port
         self.worker: Optional[PollWorker] = None
         self.history = SampleHistory()
+        self.poll_interval_s = POLL_INTERVAL_S
         self.write_queue: queue.Queue[RegisterWrite] = queue.Queue()
-        self.writes_armed = False
+        self.device_mode = "none"
         self.native_writable = False
-        self.write_buttons: list[QPushButton] = []
+        self.native_write_buttons: list[QPushButton] = []
+        self.radsens_write_buttons: list[QPushButton] = []
         self._notice = ""
         self.last_native: Optional[NativeReading] = None
         self.last_radsens: Optional[RadSensReading] = None
@@ -1398,6 +1695,12 @@ class MainWindow(QMainWindow):
         self.mode_label = QLabel("Disconnected")
         layout.addWidget(self.mode_label)
 
+        edit_menu = self.menuBar().addMenu("Edit")
+        edit_menu.addAction("Settings…", self.open_settings)
+        edit_menu.addAction("Registers…", self.open_config)
+        view_menu = self.menuBar().addMenu("View")
+        view_menu.addAction("Histogram…", self.open_histogram)
+
         self.rad_box = QGroupBox("Radiation")
         rad_row = QHBoxLayout(self.rad_box)
         meas_box = QGroupBox("Measurements")
@@ -1407,16 +1710,7 @@ class MainWindow(QMainWindow):
         self.meas_form = QFormLayout()
         self.fixed_form = QFormLayout()
         meas_layout.addLayout(self.meas_form)
-        self.histogram = HistogramBars()
-        self.histogram.hide()
-        meas_layout.addWidget(self.histogram)
-        self.hist_clear_btn = QPushButton("Clear histogram")
-        self.hist_clear_btn.clicked.connect(self._write_histogram_clear)
-        self.hist_clear_btn.hide()
-        self.write_buttons.append(self.hist_clear_btn)
-        meas_layout.addWidget(self.hist_clear_btn)
         fixed_layout.addLayout(self.fixed_form)
-        fixed_layout.addWidget(self._build_writes())
         rad_row.addWidget(meas_box, stretch=3)
         rad_row.addWidget(fixed_box, stretch=2)
 
@@ -1428,6 +1722,8 @@ class MainWindow(QMainWindow):
                 (
                     ("dose", "Dose"),
                     ("cpm", "CPM"),
+                    ("peak_win", "Window peak"),
+                    ("peak_latch", "Latched peak"),
                     ("status", "Status"),
                     ("sequence", "Sequence"),
                     ("raw", "Count"),
@@ -1445,6 +1741,7 @@ class MainWindow(QMainWindow):
                     ("calibration", "Calibration"),
                     ("window", "Window"),
                     ("holdoff", "Holdoff"),
+                    ("peak_span", "Peak span"),
                     ("firmware", "Firmware"),
                     ("address", "Address"),
                     ("sensitivity", "Sensitivity"),
@@ -1479,7 +1776,10 @@ class MainWindow(QMainWindow):
         export_btn.clicked.connect(self.export_csv)
         clear_btn = QPushButton("Clear history")
         clear_btn.clicked.connect(self.clear_history)
+        self.log_time = QCheckBox("Log time")
+        self.log_time.toggled.connect(self._toggle_log_time)
         header.addWidget(self.history_label, stretch=1)
+        header.addWidget(self.log_time)
         header.addWidget(export_btn)
         header.addWidget(clear_btn)
         graphs_layout.addLayout(header)
@@ -1490,6 +1790,8 @@ class MainWindow(QMainWindow):
                 "µSv/h",
                 [
                     ("dose_usvh", "native", QColor("#3d9eff")),
+                    ("peak_win_usvh", "window peak", QColor("#ff7eb6")),
+                    ("peak_latch_usvh", "latched peak", QColor("#ffa94d")),
                     ("dynamic_usvh", "dynamic", QColor("#ffb020")),
                     ("static_usvh", "static", QColor("#3dd68c")),
                 ],
@@ -1499,6 +1801,8 @@ class MainWindow(QMainWindow):
                 "CPM",
                 [
                     ("cpm", "native", QColor("#c084fc")),
+                    ("peak_win_cpm", "window peak", QColor("#ff7eb6")),
+                    ("peak_latch_cpm", "latched peak", QColor("#ffa94d")),
                     ("dynamic_cpm", "dynamic", QColor("#ffb020")),
                     ("static_cpm", "static", QColor("#3dd68c")),
                 ],
@@ -1511,42 +1815,49 @@ class MainWindow(QMainWindow):
         for chart in self.charts:
             chart.set_history(self.history)
             chart.hover_callback = self._on_chart_hover
-        graphs_layout.addWidget(self.charts[0])
-        graphs_layout.addWidget(self.charts[1])
-        grid = QGridLayout()
+        chart_grid = QGridLayout()
+        chart_grid.addWidget(self.charts[0], 0, 0, 1, 2)
+        chart_grid.addWidget(self.charts[1], 0, 2, 1, 2)
         for index, chart in enumerate(self.charts[2:]):
-            grid.addWidget(chart, index // 2, index % 2)
-        graphs_layout.addLayout(grid)
+            chart_grid.addWidget(chart, 1, index)
+        chart_grid.setRowStretch(0, 3)
+        chart_grid.setRowStretch(1, 2)
+        for column in range(4):
+            chart_grid.setColumnStretch(column, 1)
+        graphs_layout.addLayout(chart_grid, stretch=1)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        body = QWidget()
-        body_layout = QVBoxLayout(body)
-        body_layout.addWidget(self.rad_box)
-        body_layout.addWidget(self.bme_box)
-        body_layout.addWidget(graphs)
-        scroll.setWidget(body)
-        layout.addWidget(scroll, stretch=1)
+        sensors = QHBoxLayout()
+        sensors.addWidget(self.rad_box, stretch=3)
+        sensors.addWidget(self.bme_box, stretch=2)
+        layout.addLayout(sensors)
+        layout.addWidget(graphs, stretch=1)
 
         self.status_line = QLabel("")
         self.status_line.setWordWrap(True)
         layout.addWidget(self.status_line)
 
+        self._build_config_dialog()
+        self._build_settings_dialog()
+        self._build_histogram_dialog()
         self._show_radsens_rows(False)
         self._show_native_rows(False)
+        self._apply_write_enabled()
 
-    def _build_writes(self) -> QWidget:
-        box = QGroupBox("Register writes")
-        layout = QVBoxLayout(box)
-        self.arm_writes = QCheckBox("Arm register writes")
-        self.arm_writes.toggled.connect(self._toggle_writes)
-        layout.addWidget(self.arm_writes)
+    def _build_config_dialog(self) -> None:
+        self.config_dialog = QDialog(self)
+        self.config_dialog.setWindowTitle("Registers")
+        self.config_dialog.setModal(True)
+        self.config_dialog.resize(460, 420)
+        layout = QVBoxLayout(self.config_dialog)
         note = QLabel(
-            "Disabled until the warning is accepted. Each write confirms again. "
+            "Each write asks for confirmation before it is sent. "
             "A short or out-of-range value is ignored by the firmware."
         )
         note.setWordWrap(True)
         layout.addWidget(note)
+        self.config_hint = QLabel("Connect to a radiation device to enable writes.")
+        self.config_hint.setWordWrap(True)
+        layout.addWidget(self.config_hint)
 
         self.native_write_box = QWidget()
         native_form = QFormLayout(self.native_write_box)
@@ -1556,11 +1867,27 @@ class MainWindow(QMainWindow):
         self.holdoff_spin = QSpinBox()
         self.holdoff_spin.setRange(0, 300)
         self.holdoff_spin.setSuffix(" µs")
+        self.peak_span_spin = QSpinBox()
+        self.peak_span_spin.setRange(10, 60)
+        self.peak_span_spin.setSuffix(" s")
         self.cal_edit = QLineEdit()
         self.cal_edit.setPlaceholderText("Q16.16, e.g. 604948")
-        native_form.addRow("Window", self._write_row(self.window_spin, self._write_window))
-        native_form.addRow("Holdoff", self._write_row(self.holdoff_spin, self._write_holdoff))
-        native_form.addRow("Calibration", self._write_row(self.cal_edit, self._write_calibration))
+        native_form.addRow(
+            "Window", self._write_row(self.window_spin, self._write_window, self.native_write_buttons)
+        )
+        native_form.addRow(
+            "Holdoff", self._write_row(self.holdoff_spin, self._write_holdoff, self.native_write_buttons)
+        )
+        native_form.addRow(
+            "Peak span",
+            self._write_row(
+                self.peak_span_spin, self._write_peak_span, self.native_write_buttons
+            ),
+        )
+        native_form.addRow(
+            "Calibration",
+            self._write_row(self.cal_edit, self._write_calibration, self.native_write_buttons),
+        )
         layout.addWidget(self.native_write_box)
 
         self.radsens_write_box = QWidget()
@@ -1580,25 +1907,109 @@ class MainWindow(QMainWindow):
         self.hv_combo = QComboBox()
         self.hv_combo.addItem("0 off", 0)
         self.hv_combo.addItem("1 on", 1)
-        rad_form.addRow("Address", self._write_row(self.address_spin, self._write_address))
-        rad_form.addRow("Sensitivity", self._write_row(self.sensitivity_spin, self._write_sensitivity))
-        rad_form.addRow("Low power", self._write_row(self.lp_combo, self._write_lp))
-        rad_form.addRow("LED", self._write_row(self.led_combo, self._write_led))
-        rad_form.addRow("HV generator", self._write_row(self.hv_combo, self._write_hv))
+        rad_form.addRow(
+            "Address", self._write_row(self.address_spin, self._write_address, self.radsens_write_buttons)
+        )
+        rad_form.addRow(
+            "Sensitivity",
+            self._write_row(self.sensitivity_spin, self._write_sensitivity, self.radsens_write_buttons),
+        )
+        rad_form.addRow(
+            "Low power", self._write_row(self.lp_combo, self._write_lp, self.radsens_write_buttons)
+        )
+        rad_form.addRow(
+            "LED", self._write_row(self.led_combo, self._write_led, self.radsens_write_buttons)
+        )
+        rad_form.addRow(
+            "HV generator", self._write_row(self.hv_combo, self._write_hv, self.radsens_write_buttons)
+        )
         layout.addWidget(self.radsens_write_box)
+        layout.addStretch(1)
+
+        close = QPushButton("Close")
+        close.clicked.connect(self.config_dialog.reject)
+        layout.addWidget(close)
 
         self.native_write_box.hide()
         self.radsens_write_box.hide()
-        self._apply_write_enabled()
-        return box
 
-    def _write_row(self, editor: QWidget, slot) -> QWidget:
+    def _build_settings_dialog(self) -> None:
+        self.settings_dialog = QDialog(self)
+        self.settings_dialog.setWindowTitle("Settings")
+        self.settings_dialog.setModal(True)
+        self.settings_dialog.resize(360, 160)
+        layout = QVBoxLayout(self.settings_dialog)
+        form = QFormLayout()
+        self.samples_spin = QSpinBox()
+        self.samples_spin.setRange(60, 200000)
+        self.samples_spin.setValue(HISTORY_MAX)
+        self.interval_spin = QSpinBox()
+        self.interval_spin.setRange(1, 3600)
+        self.interval_spin.setSuffix(" s")
+        self.interval_spin.setValue(int(POLL_INTERVAL_S))
+        form.addRow("Graph samples", self.samples_spin)
+        form.addRow("Sample time", self.interval_spin)
+        layout.addLayout(form)
+        note = QLabel(
+            "Samples stay in memory for this window. "
+            "The device still publishes about once a second."
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        buttons = QHBoxLayout()
+        apply_btn = QPushButton("Apply")
+        apply_btn.clicked.connect(self.apply_settings)
+        close = QPushButton("Close")
+        close.clicked.connect(self.settings_dialog.reject)
+        buttons.addStretch(1)
+        buttons.addWidget(apply_btn)
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+
+    def open_settings(self) -> None:
+        self.samples_spin.setValue(self.history.maxlen)
+        self.interval_spin.setValue(int(self.poll_interval_s))
+        self.settings_dialog.exec()
+
+    def apply_settings(self) -> None:
+        self.history.set_maxlen(self.samples_spin.value())
+        self.poll_interval_s = float(self.interval_spin.value())
+        if self.worker is not None:
+            self.worker.interval_s = self.poll_interval_s
+        self.history_label.setText(self._history_caption())
+        for chart in self.charts:
+            chart.update()
+
+    def _build_histogram_dialog(self) -> None:
+        self.histogram_dialog = QDialog(self)
+        self.histogram_dialog.setWindowTitle("Inter-arrival histogram")
+        self.histogram_dialog.resize(640, 380)
+        layout = QVBoxLayout(self.histogram_dialog)
+        self.histogram = HistogramBars()
+        layout.addWidget(self.histogram, stretch=1)
+        self.hist_clear_btn = QPushButton("Clear histogram")
+        self.hist_clear_btn.clicked.connect(self._write_histogram_clear)
+        layout.addWidget(self.hist_clear_btn)
+        close = QPushButton("Close")
+        close.clicked.connect(self.histogram_dialog.close)
+        layout.addWidget(close)
+
+    def open_config(self) -> None:
+        self._apply_write_enabled()
+        self.config_dialog.exec()
+
+    def open_histogram(self) -> None:
+        self.histogram_dialog.show()
+        self.histogram_dialog.raise_()
+        self.histogram_dialog.activateWindow()
+
+    def _write_row(self, editor: QWidget, slot, buttons: list[QPushButton]) -> QWidget:
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         button = QPushButton("Write")
         button.clicked.connect(slot)
-        self.write_buttons.append(button)
+        buttons.append(button)
         layout.addWidget(editor, stretch=1)
         layout.addWidget(button)
         return row
@@ -1609,18 +2020,16 @@ class MainWindow(QMainWindow):
 
     def _show_native_rows(self, show: bool) -> None:
         self._show_keys(
-            ("dose", "cpm", "status", "sequence", "raw", "elapsed", "min_gap",
-             "calibration", "window", "holdoff"),
+            ("dose", "cpm", "peak_win", "peak_latch", "status", "sequence",
+             "raw", "elapsed", "min_gap", "calibration", "window", "holdoff",
+             "peak_span"),
             show,
         )
         self.native_write_box.setVisible(show and self.native_writable)
-        if not show:
-            self.histogram.hide()
-            self.hist_clear_btn.hide()
 
     def _show_radsens_rows(self, show: bool) -> None:
         self._show_keys(
-            ("dynamic", "static", "hv_status", "firmware", "address",
+            ("dynamic", "static", "hv_status", "address",
              "sensitivity", "led", "lp", "hv_generator"),
             show,
         )
@@ -1641,7 +2050,7 @@ class MainWindow(QMainWindow):
         if not port:
             QMessageBox.warning(self, "Port", "Set a serial port path.")
             return
-        self.worker = PollWorker(port, self.write_queue)
+        self.worker = PollWorker(port, self.write_queue, self.poll_interval_s)
         self.worker.snapshot.connect(self.on_snapshot)
         self.worker.failed.connect(self.on_failed)
         self.worker.start()
@@ -1659,18 +2068,24 @@ class MainWindow(QMainWindow):
         self.connect_btn.setText("Connect")
         self.port_edit.setEnabled(True)
         self.mode_label.setText("Disconnected")
+        self.setWindowTitle("GeigerNode I2C viewer")
         self._apply_write_enabled()
 
     def _history_caption(self) -> str:
         return (
             f"{self.history.sample_count()} / {self.history.maxlen} samples, "
-            "kept in memory for this window"
+            f"every {self.poll_interval_s:.0f} s, kept in memory"
         )
 
     def _on_chart_hover(self, source: HistoryChart, t: Optional[float]) -> None:
         for chart in self.charts:
             chart.cursor_t = t
             chart.show_readout = chart is source and t is not None
+            chart.update()
+
+    def _toggle_log_time(self, checked: bool) -> None:
+        for chart in self.charts:
+            chart.log_x = checked
             chart.update()
 
     def clear_history(self) -> None:
@@ -1680,42 +2095,27 @@ class MainWindow(QMainWindow):
             chart.update()
 
     def _apply_write_enabled(self) -> None:
-        armed = self.writes_armed and self.worker is not None
-        for button in getattr(self, "write_buttons", []):
-            button.setEnabled(armed)
-
-    def _toggle_writes(self, checked: bool) -> None:
-        if checked:
-            answer = QMessageBox.warning(
-                self,
-                "Arm register writes",
-                "Writes change the live device.\n\n"
-                "Native v2 stores calibration (0x12, non-zero Q16.16), the static "
-                "window (0x1E, 1..400 s), and the holdoff (0x20, 0..300 µs) in "
-                "EEPROM. Write 1 at 0x38 to clear the inter-arrival histogram. A "
-                "holdoff write also clears it. A calibration write is not a new "
-                "accepted tube coefficient.\n\n"
-                "RadSens can store a new address and sensitivity. Address 0x76 "
-                "collides with the BME680. The low-power bit and the LED do not "
-                "change the voltage or the count.\n\n"
-                "RadSens 0x11 starts or stops the HV generator. Writing 1 brings up "
-                "380 V. Writing 0 turns it off. The setpoint stays 380 V at 2400 Hz. "
-                "Stay clear of the HV section.\n\n"
-                "Each write still asks for confirmation.",
-                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Cancel,
+        connected = self.worker is not None
+        for button in self.native_write_buttons:
+            button.setEnabled(connected and self.native_writable)
+        for button in self.radsens_write_buttons:
+            button.setEnabled(connected and self.device_mode == "radsens")
+        if hasattr(self, "hist_clear_btn"):
+            has_bins = (
+                self.last_native is not None and self.last_native.has_histogram
             )
-            if answer != QMessageBox.StandardButton.Ok:
-                self.arm_writes.blockSignals(True)
-                self.arm_writes.setChecked(False)
-                self.arm_writes.blockSignals(False)
-                checked = False
-        self.writes_armed = checked
-        self._apply_write_enabled()
+            self.hist_clear_btn.setEnabled(connected and has_bins)
+
+    def _confirm_parent(self) -> QWidget:
+        if self.config_dialog.isVisible():
+            return self.config_dialog
+        if self.histogram_dialog.isVisible():
+            return self.histogram_dialog
+        return self
 
     def _confirm_write(self, text: str) -> bool:
         answer = QMessageBox.warning(
-            self,
+            self._confirm_parent(),
             "Write register",
             text,
             QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
@@ -1773,6 +2173,18 @@ class MainWindow(QMainWindow):
             return
         self._enqueue(
             NATIVE_ADDR, encode_native_holdoff(microseconds), f"holdoff {microseconds} µs"
+        )
+
+    def _write_peak_span(self) -> None:
+        seconds = self.peak_span_spin.value()
+        if not self._confirm_write(
+            f"Write {seconds} s to native 0x3E. Window and latched peaks use this "
+            "many consecutive one-second buckets. Both peaks clear immediately. "
+            "The value is stored in EEPROM."
+        ):
+            return
+        self._enqueue(
+            NATIVE_ADDR, encode_native_peak_span(seconds), f"peak span {seconds} s"
         )
 
     def _write_histogram_clear(self) -> None:
@@ -1907,6 +2319,7 @@ class MainWindow(QMainWindow):
 
     def on_snapshot(self, snap: Snapshot) -> None:
         scanned = ", ".join(f"0x{a:02X}" for a in snap.scanned) or "none"
+        self.device_mode = snap.mode
         if snap.mode == "native":
             version = snap.native.protocol if snap.native is not None else 0
             self.native_writable = version >= 2
@@ -1925,6 +2338,22 @@ class MainWindow(QMainWindow):
             self._show_native_rows(False)
             self._show_radsens_rows(False)
             self.rad_labels["protocol"].setText("absent")
+        if snap.mode == "native" and self.native_writable:
+            self.config_hint.setText(
+                "Native registers. Calibration, window, holdoff, and peak span "
+                "are stored in EEPROM. A holdoff write also clears the histogram. "
+                "A peak-span write clears both peaks."
+            )
+        elif snap.mode == "native":
+            self.config_hint.setText("This image has no writable native registers.")
+        elif snap.mode == "radsens":
+            self.config_hint.setText(
+                "RadSens registers. HV 1 starts 380 V and HV 0 stops it. "
+                "The setpoint stays 380 V at 2400 Hz. Address 0x76 collides with the BME680."
+            )
+        else:
+            self.config_hint.setText("Connect to a radiation device to enable writes.")
+        self._show_keys(("firmware",), snap.mode in ("native", "radsens"))
 
         if snap.native is not None:
             n = snap.native
@@ -1932,6 +2361,25 @@ class MainWindow(QMainWindow):
                 f"{n.dose_nsvh} nSv/h  ({n.dose_usvh:.3f} µSv/h)"
             )
             self.rad_labels["cpm"].setText(f"{n.cpm:.1f} CPM  (×10 = {n.cpm_x10})")
+            if n.has_peaks:
+                assert n.peak_win_cpm_x10 is not None
+                assert n.peak_latch_cpm_x10 is not None
+                assert n.peak_win_nsvh is not None
+                assert n.peak_latch_nsvh is not None
+                self.rad_labels["peak_win"].setText(
+                    f"{n.peak_win_cpm_x10 / 10.0:.1f} CPM  "
+                    f"({n.peak_win_nsvh / 1000.0:.3f} µSv/h)"
+                )
+                self.rad_labels["peak_latch"].setText(
+                    f"{n.peak_latch_cpm_x10 / 10.0:.1f} CPM  "
+                    f"({n.peak_latch_nsvh / 1000.0:.3f} µSv/h)  "
+                    "since previous read"
+                )
+                self.rad_labels["peak_span"].setText(f"{n.peak_span_s} s")
+            else:
+                self.rad_labels["peak_win"].setText(dash())
+                self.rad_labels["peak_latch"].setText(dash())
+                self.rad_labels["peak_span"].setText(dash())
             bits = ", ".join(n.status_names()) or "none"
             self.rad_labels["status"].setText(
                 f"{n.hv_attempts:02X} {n.status_lo:02X}  "
@@ -1939,7 +2387,7 @@ class MainWindow(QMainWindow):
             )
             self.rad_labels["sequence"].setText(str(n.sequence))
             self.rad_labels["raw"].setText(str(n.count))
-            self.rad_labels["elapsed"].setText(f"{n.elapsed_ms} ms")
+            self.rad_labels["elapsed"].setText(format_duration_s(n.elapsed_ms))
             if n.protocol >= 2:
                 self.rad_labels["window"].setText(f"{n.window_s} s")
                 self.rad_labels["holdoff"].setText(f"{n.holdoff_us} µs")
@@ -1952,6 +2400,8 @@ class MainWindow(QMainWindow):
             if n.protocol >= 2:
                 self._set_spin(self.window_spin, n.window_s or 1)
                 self._set_spin(self.holdoff_spin, n.holdoff_us)
+                if n.has_peaks:
+                    self._set_spin(self.peak_span_spin, n.peak_span_s or 10)
                 if not self.cal_edit.hasFocus():
                     self.cal_edit.setText(str(n.cal_q16))
             if n.has_histogram:
@@ -1960,14 +2410,26 @@ class MainWindow(QMainWindow):
                 else:
                     self.rad_labels["min_gap"].setText(f"{n.min_interval_us} µs")
                 self.histogram.set_bins(
-                    n.histogram_bins, n.min_interval_us, n.histogram_saturated
+                    n.histogram_bins,
+                    n.min_interval_us,
+                    n.histogram_saturated,
+                    histogram_bin_labels(n.holdoff_us),
                 )
-                self.histogram.show()
-                self.hist_clear_btn.show()
             else:
                 self.rad_labels["min_gap"].setText(dash())
-                self.histogram.hide()
-                self.hist_clear_btn.hide()
+                self.histogram.counts = ()
+                self.histogram.caption = ""
+                self.histogram.update()
+            if n.fw_version is None:
+                self.rad_labels["firmware"].setText("not in this image")
+                self.setWindowTitle("GeigerNode I2C viewer")
+            else:
+                fw = format_fw_version(*n.fw_version)
+                self.rad_labels["firmware"].setText(fw)
+                self.mode_label.setText(
+                    f"Native v{n.protocol}  {fw} @ 0x67  |  scan: {scanned}"
+                )
+                self.setWindowTitle(f"GeigerNode I2C viewer — {fw}")
             self.last_native = n
 
         if snap.radsens is not None:
@@ -2025,6 +2487,7 @@ class MainWindow(QMainWindow):
         if snap.notice:
             self._notice = snap.notice
         self.status_line.setText(snap.error or self._notice)
+        self._apply_write_enabled()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self.disconnect_bridge()

@@ -4,20 +4,29 @@
 #include <stdint.h>
 
 /*
- * Native GeigerNode I2C protocol v1. Slave address 0x67.
+ * Native GeigerNode I2C protocol v2. Slave address 0x67.
  * Map: firmware/geigernode-i2c-protocol.md
+ *
+ * GN_PROTOCOL_VERSION is the map. GN_FW_* is this firmware image,
+ * 0.2.1-beta.4. Pre-release 0 is a release build.
  */
 
 #define GN_I2C_ADDRESS           0x67U
 #define GN_PROTOCOL_VERSION      2U
+#define GN_FW_MAJOR              0U
+#define GN_FW_MINOR              2U
+#define GN_FW_PATCH              1U
+#define GN_FW_PRE                4U
 #define GN_DEVICE_ID             0x474EU
 #define GN_CAPS_DOSE             0x01U
 #define GN_CAPS_RAW              0x02U
 #define GN_CAPS_CONFIG           0x04U
 #define GN_CAPS_HISTOGRAM        0x08U
+#define GN_CAPS_PEAKS            0x10U
 #define GN_CAPS_VALUE \
-	(GN_CAPS_DOSE | GN_CAPS_RAW | GN_CAPS_CONFIG | GN_CAPS_HISTOGRAM)
-#define GN_REG_MAP_SIZE          0x39U
+	(GN_CAPS_DOSE | GN_CAPS_RAW | GN_CAPS_CONFIG | GN_CAPS_HISTOGRAM | \
+	 GN_CAPS_PEAKS)
+#define GN_REG_MAP_SIZE          0x50U
 
 #define GN_REG_DEVICE_ID         0x00U
 #define GN_REG_PROTOCOL          0x02U
@@ -42,6 +51,16 @@
 #define GN_REG_BIN_5_10MS        0x34U
 #define GN_REG_BIN_GE_10MS       0x36U
 #define GN_REG_HISTOGRAM_FLAGS   0x38U
+#define GN_REG_FW_MAJOR          0x39U
+#define GN_REG_FW_MINOR          0x3AU
+#define GN_REG_FW_PATCH          0x3BU
+#define GN_REG_FW_PRE            0x3CU
+#define GN_REG_PEAK_RESERVED     0x3DU
+#define GN_REG_PEAK_SPAN_S       0x3EU
+#define GN_REG_PEAK_WIN_CPM      0x40U
+#define GN_REG_PEAK_LATCH_CPM    0x44U
+#define GN_REG_PEAK_WIN_DOSE     0x48U
+#define GN_REG_PEAK_LATCH_DOSE   0x4CU
 
 #define GN_HISTOGRAM_SATURATED   0x01U
 #define GN_HISTOGRAM_CLEAR       0x01U
@@ -51,7 +70,10 @@
 #define GN_WINDOW_MAX_S          400U
 #define GN_WINDOW_DEFAULT_S      300U
 #define GN_HOLDOFF_MAX_US        300U
-#define GN_HOLDOFF_DEFAULT_US    300U
+#define GN_HOLDOFF_DEFAULT_US    200U
+#define GN_PEAK_SPAN_MIN_S       10U
+#define GN_PEAK_SPAN_MAX_S       60U
+#define GN_PEAK_SPAN_DEFAULT_S   10U
 
 #define GN_STATUS_VALID          0x0001U
 #define GN_STATUS_WINDOW_FULL    0x0002U

@@ -49,12 +49,13 @@ void twi_slave_init(void);
  *
  * Two register banks. A publish writes the idle bank and swings
  * regs_pub. A read freezes that published bank pointer for the
- * transaction so 0x04..0x38 (native) or 0x03..0x08 (RadSens) cannot
+ * transaction so 0x04..0x4F (native) or 0x03..0x08 (RadSens) cannot
  * tear, and a concurrent publish updates the other bank.
  *
  * Native protocol (0x67): the published bank is protocol v2. Reads do
- * not clear counters. Main applies a 4-byte write at 0x12, a 2-byte
- * write at 0x1E or 0x20, or a 1-byte write of 0x01 at 0x38. Any other
+ * not clear counters, except a full read of either latched peak
+ * register. Main applies a 4-byte write at 0x12, a 2-byte write at
+ * 0x1E, 0x20, or 0x3E, or a 1-byte write of 0x01 at 0x38. Any other
  * write is acknowledged and ignored.
  *
  * RadSens (0x66): a host write to 0x10 updates TWAR0 for the next
@@ -71,11 +72,17 @@ void twi_slave_publish_native(uint32_t dose_nsvh, uint32_t cpm_x10,
 			      uint16_t status, uint32_t sequence,
 			      uint32_t cal_q16, uint32_t count,
 			      uint32_t elapsed_ms,
-			      const struct gm_histogram *histogram);
+			      const struct gm_histogram *histogram,
+			      uint32_t peak_win_cpm, uint32_t peak_latch_cpm,
+			      uint32_t peak_win_dose, uint32_t peak_latch_dose);
 void twi_slave_set_native_status(uint16_t status);
 void twi_slave_set_native_config(uint16_t window_s, uint16_t holdoff_us,
-				 uint32_t cal_q16);
+				 uint32_t cal_q16, uint16_t peak_span_s);
+void twi_slave_set_native_peaks(uint32_t peak_win_cpm, uint32_t peak_latch_cpm,
+				uint32_t peak_win_dose, uint32_t peak_latch_dose);
 void twi_slave_clear_native_histogram(void);
+/* 1 when a finished read covered either latched peak register fully. */
+uint8_t twi_slave_take_peak_latch_consume(void);
 
 #else
 

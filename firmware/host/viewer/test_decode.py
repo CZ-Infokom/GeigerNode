@@ -17,13 +17,20 @@ from geigernode_viewer import (
     encode_native_calibration,
     encode_native_histogram_clear,
     encode_native_holdoff,
+    encode_native_peak_span,
     encode_native_window,
     encode_radsens_address,
     encode_radsens_byte,
     encode_radsens_sensitivity,
+    format_duration_s,
     format_elapsed,
+    format_fw_version,
     format_elapsed_precise,
+    histogram_bin_labels,
+    histogram_edges,
     nearest_point,
+    nice_limits,
+    y_axis_limits,
     read_spans,
     record_snapshot,
     render_csv,
@@ -77,11 +84,11 @@ class NativeDecodeTest(unittest.TestCase):
         bank[2] = 0x02
         bank[3] = 0x07
         bank[0x1E:0x20] = (300).to_bytes(2, "big")
-        bank[0x20:0x22] = (300).to_bytes(2, "big")
+        bank[0x20:0x22] = (200).to_bytes(2, "big")
         n = decode_native(bytes(bank))
         self.assertEqual(n.protocol, 2)
         self.assertEqual(n.window_s, 300)
-        self.assertEqual(n.holdoff_us, 300)
+        self.assertEqual(n.holdoff_us, 200)
         self.assertFalse(n.has_histogram)
 
     def test_native_v2_histogram(self) -> None:
@@ -108,6 +115,66 @@ class NativeDecodeTest(unittest.TestCase):
         n = decode_native(bytes(bank))
         self.assertTrue(n.histogram_saturated)
         self.assertEqual(n.histogram_bins[8], 65535)
+        self.assertIsNone(n.fw_version)
+
+    def test_histogram_edges_follow_holdoff(self) -> None:
+        self.assertEqual(
+            histogram_edges(0),
+            (50, 100, 200, 500, 1000, 2000, 5000, 10000),
+        )
+        self.assertEqual(histogram_bin_labels(0)[0], "<50 µs")
+        self.assertEqual(histogram_bin_labels(0)[-1], "≥10 ms")
+        edges = histogram_edges(200)
+        self.assertEqual(edges, (249, 298, 396, 690, 1180, 2160, 5100, 10000))
+        self.assertTrue(histogram_bin_labels(200)[0].startswith("200–"))
+        self.assertEqual(histogram_bin_labels(200)[-1], "≥10 ms")
+        self.assertGreater(edges[0], 200)
+        edges = histogram_edges(300)
+        self.assertEqual(edges, (349, 397, 494, 785, 1270, 2240, 5150, 10000))
+        self.assertTrue(histogram_bin_labels(300)[0].startswith("300–"))
+        self.assertEqual(histogram_bin_labels(300)[-1], "≥10 ms")
+        self.assertGreater(edges[0], 300)
+
+    def test_firmware_version_bytes(self) -> None:
+        bank = bytearray(0x3D)
+        bank[0:2] = bytes.fromhex("474E")
+        bank[2] = 0x02
+        bank[3] = 0x0F
+        bank[0x39:0x3D] = bytes((0, 2, 1, 4))
+        n = decode_native(bytes(bank))
+        self.assertEqual(n.fw_version, (0, 2, 1, 4))
+        self.assertEqual(format_fw_version(*n.fw_version), "0.2.1-beta.4")
+        self.assertEqual(format_fw_version(0, 2, 1, 0), "0.2.1")
+        bank[0x39:0x3D] = b"\xff\xff\xff\xff"
+        self.assertIsNone(decode_native(bytes(bank)).fw_version)
+
+    def test_native_peaks(self) -> None:
+        bank = bytearray(0x50)
+        bank[0:2] = bytes.fromhex("474E")
+        bank[2] = 0x02
+        bank[3] = 0x1F
+        bank[0x39:0x3D] = bytes((0, 2, 1, 4))
+        bank[0x3E:0x40] = (10).to_bytes(2, "big")
+        bank[0x40:0x44] = (600).to_bytes(4, "big")
+        bank[0x44:0x48] = (1200).to_bytes(4, "big")
+        bank[0x48:0x4C] = (554).to_bytes(4, "big")
+        bank[0x4C:0x50] = (1108).to_bytes(4, "big")
+        n = decode_native(bytes(bank))
+        self.assertTrue(n.has_peaks)
+        self.assertEqual(n.peak_span_s, 10)
+        self.assertEqual(n.peak_win_cpm_x10, 600)
+        self.assertEqual(n.peak_latch_cpm_x10, 1200)
+        self.assertEqual(n.peak_win_nsvh, 554)
+        self.assertEqual(n.peak_latch_nsvh, 1108)
+
+        short = bytearray(0x3D)
+        short[0:2] = bytes.fromhex("474E")
+        short[2] = 0x02
+        short[3] = 0x1F
+        short[0x39:0x3D] = bytes((0, 2, 1, 4))
+        n = decode_native(bytes(short))
+        self.assertFalse(n.has_peaks)
+        self.assertIsNone(n.peak_win_cpm_x10)
 
     def test_status_00_07_is_full_valid_window(self) -> None:
         bank = bytearray(0x1E)
@@ -173,6 +240,15 @@ class HistoryTest(unittest.TestCase):
         self.assertEqual(history.sample_count(), 0)
         self.assertIsNone(history.t0)
 
+    def test_set_maxlen_drops_oldest(self) -> None:
+        history = SampleHistory(maxlen=4)
+        for index in range(4):
+            history.add("dose_usvh", float(index), when=float(index))
+        history.set_maxlen(2)
+        self.assertEqual(history.points("dose_usvh"), [(2.0, 2.0), (3.0, 3.0)])
+        self.assertEqual(format_duration_s(300000), "300.0 s")
+        self.assertEqual(format_duration_s(1500), "1.5 s")
+
     def test_record_native_and_bme(self) -> None:
         bank = bytearray(0x1E)
         bank[0:2] = bytes.fromhex("474E")
@@ -223,13 +299,16 @@ class HistoryTest(unittest.TestCase):
 
 class RegisterWriteTest(unittest.TestCase):
     def test_native_map_splits_at_bridge_limit(self) -> None:
-        spans = read_spans(0x39)
-        self.assertEqual(spans, [(0, 32), (32, 25)])
-        self.assertEqual(sum(length for _, length in spans), 0x39)
+        spans = read_spans(0x50)
+        self.assertEqual(spans, [(0, 32), (32, 32), (64, 16)])
+        self.assertEqual(sum(length for _, length in spans), 0x50)
 
     def test_native_and_radsens_payloads(self) -> None:
         self.assertEqual(encode_native_window(300), bytes.fromhex("1E012C"))
+        self.assertEqual(encode_native_holdoff(200), bytes.fromhex("2000C8"))
         self.assertEqual(encode_native_holdoff(300), bytes.fromhex("20012C"))
+        self.assertEqual(encode_native_peak_span(10), bytes.fromhex("3E000A"))
+        self.assertEqual(encode_native_peak_span(60), bytes.fromhex("3E003C"))
         self.assertEqual(encode_native_histogram_clear(), bytes.fromhex("3801"))
         self.assertEqual(encode_native_calibration(604948), bytes.fromhex("1200093B14"))
         self.assertEqual(encode_radsens_sensitivity(65), bytes.fromhex("124100"))
@@ -241,6 +320,10 @@ class RegisterWriteTest(unittest.TestCase):
             encode_native_window(0)
         with self.assertRaises(ValueError):
             encode_native_holdoff(301)
+        with self.assertRaises(ValueError):
+            encode_native_peak_span(9)
+        with self.assertRaises(ValueError):
+            encode_native_peak_span(61)
         with self.assertRaises(ValueError):
             encode_radsens_address(0x02)
         with self.assertRaises(ValueError):
@@ -276,6 +359,34 @@ class CursorTest(unittest.TestCase):
         px = x_from_time(10.0, 56, 200, 0.0, 20.0)
         self.assertAlmostEqual(time_from_x(px, 56, 200, 0.0, 20.0), 10.0)
         self.assertEqual(format_elapsed_precise(754), "12m 34s")
+
+    def test_log_time_keeps_zero_and_compresses_early_samples(self) -> None:
+        self.assertAlmostEqual(x_from_time(0.0, 0, 100, 0.0, 100.0, log=True), 0.0)
+        early = x_from_time(20.0, 0, 100, 0.0, 100.0, log=True) - x_from_time(
+            10.0, 0, 100, 0.0, 100.0, log=True
+        )
+        late = x_from_time(100.0, 0, 100, 0.0, 100.0, log=True) - x_from_time(
+            90.0, 0, 100, 0.0, 100.0, log=True
+        )
+        self.assertGreater(late, early)
+        px = x_from_time(10.0, 56, 200, 0.0, 100.0, log=True)
+        self.assertAlmostEqual(time_from_x(px, 56, 200, 0.0, 100.0, log=True), 10.0)
+
+    def test_nice_limits_use_four_round_steps(self) -> None:
+        self.assertEqual(nice_limits(0, 37), (0, 40, 10))
+        self.assertEqual(nice_limits(0, 0.51), (0, 0.8, 0.2))
+        lo, hi, step = nice_limits(21.1, 22.6)
+        self.assertAlmostEqual(lo, 21.0)
+        self.assertAlmostEqual(hi, 23.0)
+        self.assertAlmostEqual(step, 0.5)
+        self.assertEqual(nice_limits(0, 90, time=True), (0, 120, 30))
+
+    def test_y_axis_snaps_a_near_zero_end(self) -> None:
+        self.assertEqual(y_axis_limits(2, 37), (0, 40, 10))
+        self.assertEqual(y_axis_limits(15, 37), (10, 50, 10))
+        self.assertEqual(y_axis_limits(5, 25), (5, 25, 5))
+        self.assertEqual(y_axis_limits(-15, -1), (-16, 0, 4))
+        self.assertEqual(y_axis_limits(-18, -12), (-18, -10, 2))
 
 
 if __name__ == "__main__":
