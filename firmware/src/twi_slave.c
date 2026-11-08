@@ -513,7 +513,12 @@ void twi_slave_clear_native_histogram(void)
 
 void twi_slave_note_peak_latch(void)
 {
-	peak_latch_live_gen++;
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+		peak_latch_live_gen++;
+		if (peak_latch_consume) {
+			peak_latch_keep = 1;
+		}
+	}
 }
 
 uint8_t twi_slave_take_peak_latch_consume(void)
@@ -523,7 +528,12 @@ uint8_t twi_slave_take_peak_latch_consume(void)
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
 		flag = peak_latch_consume;
 		if (flag) {
-			flag = peak_latch_keep ? 2U : 1U;
+			if (peak_latch_keep ||
+			    (peak_latch_live_gen != peak_latch_read_gen)) {
+				flag = 2U;
+			} else {
+				flag = 1U;
+			}
 			peak_latch_consume = 0;
 			peak_latch_keep = 0;
 		}
