@@ -35,7 +35,16 @@ static volatile uint8_t twi_cmd_data[TWI_WRITE_MAX];
 static volatile uint8_t twi_cmd_ready;
 #ifdef GEIGERNODE_PROTOCOL_NATIVE
 static uint8_t read_start;
+/*
+ * live_gen increments when RAM takes a new latch winner. Each bank
+ * stores the gen of the latch bytes it currently holds. A consume
+ * keeps RAM when live_gen moved after that frozen snapshot.
+ */
+static volatile uint8_t peak_latch_live_gen;
+static volatile uint8_t peak_latch_pub_gen[2];
+static uint8_t peak_latch_read_gen;
 static volatile uint8_t peak_latch_consume;
+static volatile uint8_t peak_latch_keep;
 #endif
 
 #ifdef GEIGERNODE_PROTOCOL_NATIVE
@@ -115,6 +124,18 @@ static void twi_fill_bank(volatile uint8_t *dest)
  * by an in-flight read. When the published bank is frozen, the idle
  * bank is filled from it so the reader keeps the old snapshot.
  */
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+static uint8_t twi_bank_i(volatile uint8_t *bank)
+{
+	return (uint8_t)(bank == regs[1]);
+}
+
+static void twi_stamp_latch_gen(volatile uint8_t *dest)
+{
+	peak_latch_pub_gen[twi_bank_i(dest)] = peak_latch_live_gen;
+}
+#endif
+
 static volatile uint8_t *twi_begin_update(void)
 {
 	volatile uint8_t *dest;
@@ -127,6 +148,10 @@ static volatile uint8_t *twi_begin_update(void)
 		for (i = 0; i < TWI_REG_COUNT; i++) {
 			dest[i] = regs_pub[i];
 		}
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+		peak_latch_pub_gen[twi_bank_i(dest)] =
+			peak_latch_pub_gen[twi_bank_i(regs_pub)];
+#endif
 	} else if (other == read_bank) {
 		dest = regs_pub;
 	} else {
@@ -134,6 +159,10 @@ static volatile uint8_t *twi_begin_update(void)
 		for (i = 0; i < TWI_REG_COUNT; i++) {
 			dest[i] = regs_pub[i];
 		}
+#ifdef GEIGERNODE_PROTOCOL_NATIVE
+		peak_latch_pub_gen[twi_bank_i(dest)] =
+			peak_latch_pub_gen[twi_bank_i(regs_pub)];
+#endif
 	}
 	return dest;
 }
@@ -275,6 +304,7 @@ ISR(TWI0_vect)
 		}
 #ifdef GEIGERNODE_PROTOCOL_NATIVE
 		read_start = send_ptr;
+		peak_latch_read_gen = peak_latch_pub_gen[twi_bank_i(read_bank)];
 #endif
 		twi_send_byte();
 		TWCR0 = TWI_CR_ACK;
@@ -298,6 +328,9 @@ ISR(TWI0_vect)
 		     (read_start <= GN_REG_PEAK_LATCH_DOSE &&
 		      send_ptr >= (uint8_t)(GN_REG_PEAK_LATCH_DOSE + 4U)))) {
 			peak_latch_consume = 1;
+			peak_latch_keep =
+				(uint8_t)(peak_latch_live_gen !=
+					  peak_latch_read_gen);
 		}
 #endif
 		read_bank = 0;
@@ -341,7 +374,12 @@ void twi_slave_init(void)
 	twi_cmd_ready = 0;
 #ifdef GEIGERNODE_PROTOCOL_NATIVE
 	read_start = 0;
+	peak_latch_live_gen = 0;
+	peak_latch_pub_gen[0] = 0;
+	peak_latch_pub_gen[1] = 0;
+	peak_latch_read_gen = 0;
 	peak_latch_consume = 0;
+	peak_latch_keep = 0;
 #endif
 	for (i = 0; i < TWI_WRITE_MAX; i++) {
 		twi_write_data[i] = 0;
@@ -409,6 +447,7 @@ void twi_slave_publish_native(uint32_t dose_nsvh, uint32_t cpm_x10,
 		twi_store_u32(&dest[GN_REG_PEAK_LATCH_CPM], peak_latch_cpm);
 		twi_store_u32(&dest[GN_REG_PEAK_WIN_DOSE], peak_win_dose);
 		twi_store_u32(&dest[GN_REG_PEAK_LATCH_DOSE], peak_latch_dose);
+		twi_stamp_latch_gen(dest);
 		regs_pub = dest;
 	}
 }
@@ -452,6 +491,7 @@ void twi_slave_set_native_peaks(uint32_t peak_win_cpm, uint32_t peak_latch_cpm,
 		twi_store_u32(&dest[GN_REG_PEAK_LATCH_CPM], peak_latch_cpm);
 		twi_store_u32(&dest[GN_REG_PEAK_WIN_DOSE], peak_win_dose);
 		twi_store_u32(&dest[GN_REG_PEAK_LATCH_DOSE], peak_latch_dose);
+		twi_stamp_latch_gen(dest);
 		regs_pub = dest;
 	}
 }
@@ -471,13 +511,22 @@ void twi_slave_clear_native_histogram(void)
 	}
 }
 
+void twi_slave_note_peak_latch(void)
+{
+	peak_latch_live_gen++;
+}
+
 uint8_t twi_slave_take_peak_latch_consume(void)
 {
 	uint8_t flag;
 
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
 		flag = peak_latch_consume;
-		peak_latch_consume = 0;
+		if (flag) {
+			flag = peak_latch_keep ? 2U : 1U;
+			peak_latch_consume = 0;
+			peak_latch_keep = 0;
+		}
 	}
 	return flag;
 }

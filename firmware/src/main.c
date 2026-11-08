@@ -135,7 +135,6 @@ static uint32_t peak_win_ms;
 static uint8_t peak_latch_valid;
 static uint32_t peak_latch_count;
 static uint32_t peak_latch_ms;
-static uint8_t peak_latch_dirty;
 static uint8_t peak_need_rescan;
 #endif
 
@@ -437,7 +436,6 @@ static void peak_span_apply(uint16_t next)
 	peak_latch_valid = 0;
 	peak_latch_count = 0;
 	peak_latch_ms = 0;
-	peak_latch_dirty = 0;
 	peak_rebuild_newest_slice();
 	peak_need_rescan = 1;
 	twi_slave_set_native_peaks(0, 0, 0, 0);
@@ -480,7 +478,7 @@ static void peak_on_bucket(uint16_t delta, uint16_t bucket_ms)
 		peak_latch_valid = 1;
 		peak_latch_count = peak_slice_sum;
 		peak_latch_ms = peak_slice_ms;
-		peak_latch_dirty = 1;
+		twi_slave_note_peak_latch();
 	}
 }
 
@@ -511,16 +509,14 @@ static void peak_rates(uint32_t *win_cpm, uint32_t *latch_cpm,
 	}
 }
 
-static void peak_on_latch_consume(void)
+static void peak_on_latch_consume(uint8_t keep)
 {
 	uint32_t win_cpm;
 	uint32_t latch_cpm;
 	uint32_t win_dose;
 	uint32_t latch_dose;
 
-	if (peak_latch_dirty) {
-		peak_latch_dirty = 0;
-	} else {
+	if (!keep) {
 		peak_latch_valid = 0;
 		peak_latch_count = 0;
 		peak_latch_ms = 0;
@@ -735,7 +731,6 @@ static void native_publish_rates(uint8_t app, uint8_t attempts)
 				 gn_config_cal_q16(), stat_sum, run_elapsed_ms,
 				 &histogram, peak_win_cpm, peak_latch_cpm,
 				 peak_win_dose, peak_latch_dose);
-	peak_latch_dirty = 0;
 }
 #endif
 
@@ -907,8 +902,12 @@ int main(void)
 #ifdef GEIGERNODE_PROTOCOL_NATIVE
 		window_apply(gn_config_window_s());
 		peak_span_apply(gn_config_peak_span_s());
-		if (twi_slave_take_peak_latch_consume()) {
-			peak_on_latch_consume();
+		{
+			uint8_t consume = twi_slave_take_peak_latch_consume();
+
+			if (consume) {
+				peak_on_latch_consume((uint8_t)(consume == 2U));
+			}
 		}
 #endif
 		hv_cmd = radsens_hv_command();

@@ -81,7 +81,8 @@ void twi_slave_set_native_config(uint16_t window_s, uint16_t holdoff_us,
 void twi_slave_set_native_peaks(uint32_t peak_win_cpm, uint32_t peak_latch_cpm,
 				uint32_t peak_win_dose, uint32_t peak_latch_dose);
 void twi_slave_clear_native_histogram(void);
-/* 1 when a finished read covered either latched peak register fully. */
+void twi_slave_note_peak_latch(void);
+/* 0 none, 1 clear the latch, 2 keep a newer latch than the frozen bank. */
 uint8_t twi_slave_take_peak_latch_consume(void);
 
 #else
