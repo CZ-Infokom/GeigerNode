@@ -38,3 +38,4 @@ _autosave-*
 fp-info-cache
 firmware/flipper/
 __pycache__
+.cursor/rules/github-identity.mdc
